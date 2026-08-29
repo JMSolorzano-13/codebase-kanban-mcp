@@ -1,3 +1,10 @@
+/**
+ * @sdd-task: Task #1 - useProjects list-only
+ * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
+ * @sdd-decision: SDD-ADR-006 - useProjects is list_projects only
+ * @sdd-why: ProjectPicker must list name + path without reading schema
+ * @human-debug: If picker is empty with projects in the DB → useProjects error/loading, not schema
+ */
 import { useEffect, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useProjects } from "../hooks/useProjects";
@@ -25,7 +32,7 @@ function ProjectPicker({ onSelectProject }: { onSelectProject: (project: string)
         <p className="text-foreground/20 text-[12px]">{t.projects.noIndexedProjects}</p>
       ) : (
         <div className="flex flex-col gap-2">
-          {projects.map(({ project: p }) => (
+          {projects.map((p) => (
             <button
               key={p.name}
               onClick={() => onSelectProject(p.name)}

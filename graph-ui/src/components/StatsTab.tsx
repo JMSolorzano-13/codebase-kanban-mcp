@@ -1,7 +1,13 @@
+/**
+ * @sdd-task: Task #1 - useProjects list-only
+ * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
+ * @sdd-decision: SDD-ADR-006 - useProjects is list_projects only
+ * @sdd-why: Typecheck Project[] until Task #4 removes StatsTab; no schema fetch
+ * @human-debug: If rows miss name/path → p.project leftover; schema chips are gone by design
+ */
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useProjects } from "../hooks/useProjects";
-import { colorForLabel } from "../lib/colors";
 import { useUiMessages } from "../lib/i18n";
 
 interface StatsTabProps {
@@ -504,12 +510,8 @@ export function StatsTab({ onSelectProject }: StatsTabProps) {
   const [indexing, setIndexing] = useState(false);
 
   const aggregate = useMemo(() => {
-    let totalNodes = 0, totalEdges = 0;
-    for (const p of projects) {
-      totalNodes += p.schema?.node_labels?.reduce((s, l) => s + l.count, 0) ?? 0;
-      totalEdges += p.schema?.edge_types?.reduce((s, t) => s + t.count, 0) ?? 0;
-    }
-    return { projects: projects.length, nodes: totalNodes, edges: totalEdges };
+    /* Schema counts dropped with TD-001; cards stay until Task #4. */
+    return { projects: projects.length, nodes: 0, edges: 0 };
   }, [projects]);
 
   const deleteProject = useCallback(async (name: string) => {
@@ -555,44 +557,24 @@ export function StatsTab({ onSelectProject }: StatsTabProps) {
         )}
 
         <div className="space-y-3">
-          {projects.map((p) => {
-            const totalNodes = p.schema?.node_labels?.reduce((s, l) => s + l.count, 0) ?? 0;
-            const totalEdges = p.schema?.edge_types?.reduce((s, t) => s + t.count, 0) ?? 0;
-            return (
-              <div key={p.project.name} className="rounded-xl border border-border/30 bg-white/[0.02] hover:bg-white/[0.035] transition-all p-5">
+          {projects.map((p) => (
+              <div key={p.name} className="rounded-xl border border-border/30 bg-white/[0.02] hover:bg-white/[0.035] transition-all p-5">
                 <div className="flex items-start justify-between gap-3 mb-3">
                   <div className="min-w-0 flex items-start gap-2.5">
-                    <div className="mt-1.5"><HealthDot name={p.project.name} /></div>
+                    <div className="mt-1.5"><HealthDot name={p.name} /></div>
                     <div className="min-w-0">
-                      <h3 className="text-[14px] font-semibold text-foreground/90 mb-0.5">{p.project.name}</h3>
-                      <p className="text-[11px] text-foreground/20 font-mono truncate">{p.project.root_path}</p>
+                      <h3 className="text-[14px] font-semibold text-foreground/90 mb-0.5">{p.name}</h3>
+                      <p className="text-[11px] text-foreground/20 font-mono truncate">{p.root_path}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
-                    <AdrButton project={p.project.name} />
-                    <button onClick={() => onSelectProject(p.project.name)} className="px-3 py-1.5 rounded-lg bg-primary/15 hover:bg-primary/25 text-primary text-[12px] font-medium transition-all">{t.projects.viewGraph}</button>
-                    <button onClick={() => deleteProject(p.project.name)} className="px-2 py-1.5 rounded-lg hover:bg-destructive/10 text-foreground/20 hover:text-destructive text-[12px] transition-all" title={t.projects.deleteTitle}>✕</button>
+                    <AdrButton project={p.name} />
+                    <button onClick={() => onSelectProject(p.name)} className="px-3 py-1.5 rounded-lg bg-primary/15 hover:bg-primary/25 text-primary text-[12px] font-medium transition-all">{t.projects.viewGraph}</button>
+                    <button onClick={() => deleteProject(p.name)} className="px-2 py-1.5 rounded-lg hover:bg-destructive/10 text-foreground/20 hover:text-destructive text-[12px] transition-all" title={t.projects.deleteTitle}>✕</button>
                   </div>
                 </div>
-                {p.schema && (
-                  <>
-                    <div className="flex gap-6 text-[12px] text-foreground/30 mb-3">
-                      <span><strong className="text-foreground/55 tabular-nums">{totalNodes.toLocaleString()}</strong> {t.projects.nodes}</span>
-                      <span><strong className="text-foreground/55 tabular-nums">{totalEdges.toLocaleString()}</strong> {t.projects.edges}</span>
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {p.schema.node_labels?.map((l) => (
-                        <span key={l.label} className="inline-flex items-center gap-1 px-1.5 py-[2px] rounded-md text-[10px] font-medium" style={{ backgroundColor: colorForLabel(l.label) + "10", color: colorForLabel(l.label) + "bb" }}>
-                          <span className="w-[4px] h-[4px] rounded-full" style={{ backgroundColor: colorForLabel(l.label) }} />
-                          {l.label} {l.count.toLocaleString()}
-                        </span>
-                      ))}
-                    </div>
-                  </>
-                )}
               </div>
-            );
-          })}
+          ))}
         </div>
       </div>
       {showModal && <CreateIndexModal onClose={() => setShowModal(false)} onCreated={() => { setIndexing(true); refresh(); }} />}

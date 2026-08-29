@@ -1,21 +1,23 @@
+/**
+ * @sdd-task: Task #1 - useProjects list-only
+ * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
+ * @sdd-decision: SDD-ADR-006 - useProjects is list_projects only
+ * @sdd-why: Dashboard list paint must not call get_graph_schema (TD-001)
+ * @human-debug: If list stays empty after a live daemon → fetchProjects catch (RPC/HTTP) or result.projects missing
+ */
 import { useCallback, useEffect, useState } from "react";
 import { callTool } from "../api/rpc";
-import type { Project, SchemaInfo } from "../lib/types";
-
-interface ProjectInfo {
-  project: Project;
-  schema: SchemaInfo | null;
-}
+import type { Project } from "../lib/types";
 
 interface UseProjectsResult {
-  projects: ProjectInfo[];
+  projects: Project[];
   loading: boolean;
   error: string | null;
   refresh: () => void;
 }
 
 export function useProjects(): UseProjectsResult {
-  const [projects, setProjects] = useState<ProjectInfo[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,23 +26,7 @@ export function useProjects(): UseProjectsResult {
     setError(null);
     try {
       const result = await callTool<{ projects: Project[] }>("list_projects");
-      const list = result.projects ?? [];
-
-      /* Fetch schema for each project */
-      const infos: ProjectInfo[] = await Promise.all(
-        list.map(async (p) => {
-          try {
-            const schema = await callTool<SchemaInfo>("get_graph_schema", {
-              project: p.name,
-            });
-            return { project: p, schema };
-          } catch {
-            return { project: p, schema: null };
-          }
-        }),
-      );
-
-      setProjects(infos);
+      setProjects(result.projects ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to fetch projects");
     } finally {
@@ -49,7 +35,7 @@ export function useProjects(): UseProjectsResult {
   }, []);
 
   useEffect(() => {
-    fetchProjects();
+    void fetchProjects();
   }, [fetchProjects]);
 
   return { projects, loading, error, refresh: fetchProjects };

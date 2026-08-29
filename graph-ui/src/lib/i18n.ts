@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #5 - App routing + TabBar delete
- * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
- * @sdd-decision: SDD-ADR-008 - TabId dashboard|graph; stats/control/specs alias home
- * @sdd-why: Graph header back control needs backToDashboard in en+zh; enter/lastIndexed stay
- * @human-debug: If back has no accessible name → messages.*.graph.backToDashboard missing
+ * @sdd-task: Task #3 - Dashboard conflict group + Enter newest + delete older
+ * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
+ * @sdd-decision: SDD-ADR-016 - conflict copy on Dashboard groups
+ * @sdd-why: US-004/005 conflict region and per-name Delete need en+zh accessible names
+ * @human-debug: If conflict region has no name → messages.*.projects.conflict missing; if Delete a1 missing → deleteNamed
  */
 import { useEffect, useState } from "react";
 
@@ -14,6 +14,7 @@ export const messages = {
     tabs: {
       specs: "Specs",
       graph: "Graph",
+      adr: "ADR",
       projects: "Projects",
       control: "Control",
     },
@@ -44,7 +45,9 @@ export const messages = {
       nodes: "nodes",
       edges: "edges",
       deleteTitle: "Delete index",
+      deleteNamed: (name: string) => `Delete ${name}`,
       deleteConfirm: (name: string) => `Delete index for "${name}"?`,
+      conflict: "Path conflict",
       healthHealthy: "Database healthy",
       healthMissing: "Database missing",
       healthCorrupt: "Database unhealthy",
@@ -70,6 +73,9 @@ export const messages = {
     adr: {
       title: "Architecture Decision Record",
       lastUpdated: "Last updated",
+      saveSuccess: "ADR saved",
+      saveError: "Failed to save ADR",
+      unsavedConfirm: "You have unsaved ADR changes. Leave without saving?",
     },
     control: {
       panel: "Control Panel",
@@ -103,6 +109,7 @@ export const messages = {
     tabs: {
       specs: "规格",
       graph: "图谱",
+      adr: "架构决策",
       projects: "项目",
       control: "控制",
     },
@@ -133,7 +140,9 @@ export const messages = {
       nodes: "节点",
       edges: "边",
       deleteTitle: "删除索引",
+      deleteNamed: (name: string) => `删除 ${name}`,
       deleteConfirm: (name: string) => `删除 "${name}" 的索引？`,
+      conflict: "路径冲突",
       healthHealthy: "数据库正常",
       healthMissing: "数据库缺失",
       healthCorrupt: "数据库异常",
@@ -159,6 +168,9 @@ export const messages = {
     adr: {
       title: "架构决策记录",
       lastUpdated: "最后更新",
+      saveSuccess: "架构决策已保存",
+      saveError: "保存架构决策失败",
+      unsavedConfirm: "架构决策有未保存的更改。确定不保存并离开？",
     },
     control: {
       panel: "控制面板",

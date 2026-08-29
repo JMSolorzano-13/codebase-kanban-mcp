@@ -1,13 +1,13 @@
 /**
- * @sdd-task: Task #4 - Dashboard page: list + Control + create-index
- * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
- * @sdd-decision: SDD-ADR-002 - Stacked Dashboard: list then Control, one ScrollArea
- * @sdd-why: Task #4 Gherkin — identity rows, path-only index, Control polls, empty/error
- * @human-debug: If 202 calls onSelectProject → create wired navigate; if polls=1 → fake timers not advanced
+ * @sdd-task: Task #3 - Dashboard conflict group + Enter newest + delete older
+ * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
+ * @sdd-decision: SDD-ADR-016 - Dashboard groups by list canonical_root
+ * @sdd-why: US-004/005 Gherkin — conflict region, Enter newest, per-older confirm-delete
+ * @human-debug: If Enter calls onSelectProject with the older name → pickNewest; if Path repeats → group header missing
  */
 /* @vitest-environment jsdom */
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { messages } from "../lib/i18n";
 import { Dashboard } from "./Dashboard";
@@ -367,5 +367,133 @@ describe("Dashboard create-index modal", () => {
 
     await new Promise((r) => setTimeout(r, 400));
     expect(browseCalls()).toBe(before);
+  });
+});
+
+function twoClones() {
+  return {
+    projects: [
+      { name: "alpha-old", root_path: "/tmp/alpha", indexed_at: "2026-08-28T10:00:00Z", canonical_root: "/tmp/alpha" },
+      { name: "alpha", root_path: "/tmp/alpha", indexed_at: "2026-08-29T10:00:00Z", canonical_root: "/tmp/alpha" },
+    ],
+  };
+}
+
+function threeClones() {
+  return {
+    projects: [
+      { name: "a1", root_path: "/tmp/alpha", indexed_at: "2026-08-27T10:00:00Z", canonical_root: "/tmp/alpha" },
+      { name: "a2", root_path: "/tmp/alpha", indexed_at: "2026-08-28T10:00:00Z", canonical_root: "/tmp/alpha" },
+      { name: "a3", root_path: "/tmp/alpha", indexed_at: "2026-08-29T10:00:00Z", canonical_root: "/tmp/alpha" },
+    ],
+  };
+}
+
+function deleteCalls(fetchMock: ReturnType<typeof vi.fn>, name: string) {
+  return fetchMock.mock.calls.filter((call) => {
+    const url = String(call[0]);
+    const init = call[1] as RequestInit | undefined;
+    return url === `/api/project?name=${encodeURIComponent(name)}` && init?.method === "DELETE";
+  });
+}
+
+describe("Dashboard path conflict groups", () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("shows a two-clone conflict and Enter opens the newest name", async () => {
+    mockDashboardFetch((url) => {
+      if (url === "/rpc") return okRpc(twoClones());
+      return undefined;
+    });
+    const onSelectProject = vi.fn();
+    render(<Dashboard onSelectProject={onSelectProject} />);
+
+    const region = await screen.findByRole("region", { name: messages.en.projects.conflict });
+    expect(within(region).getByText("alpha-old")).toBeInTheDocument();
+    expect(within(region).getByText("alpha")).toBeInTheDocument();
+    expect(within(region).getAllByText("/tmp/alpha")).toHaveLength(1);
+
+    const oldTime = region.querySelector('time[datetime="2026-08-28T10:00:00Z"]');
+    const newTime = region.querySelector('time[datetime="2026-08-29T10:00:00Z"]');
+    expect(oldTime?.textContent).toContain("2026");
+    expect(oldTime?.textContent).toContain("28");
+    expect(oldTime?.textContent).not.toBe("2026-08-28T10:00:00Z");
+    expect(newTime?.textContent).toContain("2026");
+    expect(newTime?.textContent).toContain("29");
+    expect(newTime?.textContent).not.toBe("2026-08-29T10:00:00Z");
+
+    fireEvent.click(within(region).getByRole("button", { name: messages.en.projects.enter }));
+    expect(onSelectProject).toHaveBeenCalledTimes(1);
+    expect(onSelectProject).toHaveBeenCalledWith("alpha");
+  });
+
+  it("confirms delete older and removes only that name after refresh", async () => {
+    let listed = twoClones().projects;
+    const fetchMock = mockDashboardFetch((url, init) => {
+      if (url === "/rpc") return okRpc({ projects: listed });
+      if (url.startsWith("/api/project") && init?.method === "DELETE") {
+        const q = new URL(url, "http://ui.local");
+        listed = listed.filter((p) => p.name !== q.searchParams.get("name"));
+        return json({});
+      }
+      return undefined;
+    });
+    const onSelectProject = vi.fn();
+    vi.stubGlobal("confirm", () => true);
+
+    render(<Dashboard onSelectProject={onSelectProject} />);
+    const region = await screen.findByRole("region", { name: messages.en.projects.conflict });
+    fireEvent.click(within(region).getByRole("button", { name: messages.en.projects.deleteNamed("alpha-old") }));
+
+    await waitFor(() => {
+      expect(deleteCalls(fetchMock, "alpha-old")).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("alpha-old")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+    expect(deleteCalls(fetchMock, "alpha")).toHaveLength(0);
+    expect(onSelectProject).not.toHaveBeenCalled();
+  });
+
+  it("three clones: Enter a3 and Delete is per older name", async () => {
+    mockDashboardFetch((url) => {
+      if (url === "/rpc") return okRpc(threeClones());
+      return undefined;
+    });
+    const onSelectProject = vi.fn();
+    render(<Dashboard onSelectProject={onSelectProject} />);
+
+    const region = await screen.findByRole("region", { name: messages.en.projects.conflict });
+    expect(within(region).getByText("a1")).toBeInTheDocument();
+    expect(within(region).getByText("a2")).toBeInTheDocument();
+    expect(within(region).getByText("a3")).toBeInTheDocument();
+    expect(within(region).getByRole("button", { name: messages.en.projects.deleteNamed("a1") })).toBeInTheDocument();
+    expect(within(region).getByRole("button", { name: messages.en.projects.deleteNamed("a2") })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /delete (both|all|a1 and a2|a2 and a1)/i })).not.toBeInTheDocument();
+
+    fireEvent.click(within(region).getByRole("button", { name: messages.en.projects.enter }));
+    expect(onSelectProject).toHaveBeenCalledWith("a3");
+  });
+
+  it("cancelled delete older sends no DELETE and keeps the conflict", async () => {
+    const fetchMock = mockDashboardFetch((url) => {
+      if (url === "/rpc") return okRpc(twoClones());
+      return undefined;
+    });
+    vi.stubGlobal("confirm", () => false);
+
+    render(<Dashboard onSelectProject={() => {}} />);
+    const region = await screen.findByRole("region", { name: messages.en.projects.conflict });
+    fireEvent.click(within(region).getByRole("button", { name: messages.en.projects.deleteNamed("alpha-old") }));
+
+    expect(deleteCalls(fetchMock, "alpha-old")).toHaveLength(0);
+    expect(within(region).getByText("alpha-old")).toBeInTheDocument();
+    expect(within(region).getByText("alpha")).toBeInTheDocument();
   });
 });

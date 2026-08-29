@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #5 - App routing + TabBar delete
- * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
- * @sdd-decision: SDD-ADR-008 - TabId dashboard|graph; stats/control/specs alias home
- * @sdd-why: backToDashboard catalog lock for Graph header back control
- * @human-debug: If back has no accessible name → messages.*.graph.backToDashboard drifted
+ * @sdd-task: Task #3 - Dashboard conflict group + Enter newest + delete older
+ * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
+ * @sdd-decision: SDD-ADR-016 - conflict copy on Dashboard groups
+ * @sdd-why: Lock projects.conflict and deleteNamed in en+zh for conflict Delete controls
+ * @human-debug: If conflict region has no English name → messages.en.projects.conflict drifted
  */
 import { describe, expect, it } from "vitest";
 import { detectLanguage, messages } from "./i18n";
@@ -52,5 +52,17 @@ describe("i18n", () => {
     expect(messages.en.projects.indexFirstRepository).toBe("Index your first repository");
     expect(messages.en.graph.backToDashboard).toBe("Back to Dashboard");
     expect(messages.zh.graph.backToDashboard).toBe("返回仪表盘");
+    expect(messages.en.tabs.adr).toBe("ADR");
+    expect(messages.zh.tabs.adr).toBe("架构决策");
+    expect(messages.en.adr.saveSuccess).toBe("ADR saved");
+    expect(messages.zh.adr.saveSuccess).toBe("架构决策已保存");
+    expect(messages.en.adr.saveError).toBe("Failed to save ADR");
+    expect(messages.zh.adr.saveError).toBe("保存架构决策失败");
+    expect(messages.en.adr.unsavedConfirm).toBe("You have unsaved ADR changes. Leave without saving?");
+    expect(messages.zh.adr.unsavedConfirm).toBe("架构决策有未保存的更改。确定不保存并离开？");
+    expect(messages.en.projects.conflict).toBe("Path conflict");
+    expect(messages.zh.projects.conflict).toBe("路径冲突");
+    expect(messages.en.projects.deleteNamed("a1")).toBe("Delete a1");
+    expect(messages.zh.projects.deleteNamed("a1")).toBe("删除 a1");
   });
 });

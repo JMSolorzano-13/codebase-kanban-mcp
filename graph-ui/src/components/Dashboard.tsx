@@ -1,15 +1,17 @@
 /**
- * @sdd-task: Task #4 - Dashboard page: list + Control + create-index
- * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
- * @sdd-decision: SDD-ADR-002 - Stacked Dashboard: list then Control, one ScrollArea
- * @sdd-why: Account home is identity + freshness + daemon Control; no schema cards
- * @human-debug: If Graph opens after 202 → onSelectProject called from create; if no Control → embedded mount missing
+ * @sdd-task: Task #3 - Dashboard conflict group + Enter newest + delete older
+ * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
+ * @sdd-decision: SDD-ADR-016 - Dashboard groups by list canonical_root
+ * @sdd-why: US-004/005 — conflict region, Enter newest, confirm-delete older only
+ * @human-debug: If Enter opens the older name → pickNewest; if Path repeats per clone → group header missing; if two names vanish on one click → a multi-delete control was added
  */
 import { useCallback, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useProjects } from "../hooks/useProjects";
 import { formatIndexedAt } from "../lib/formatIndexedAt";
 import { useUiLanguage, useUiMessages } from "../lib/i18n";
+import { groupProjects } from "../lib/pathGroups";
+import type { Project } from "../lib/types";
 import { ControlTab } from "./ControlTab";
 import { CreateIndexModal } from "./CreateIndexModal";
 import { HealthDot } from "./HealthDot";
@@ -35,6 +37,8 @@ export function Dashboard({ onSelectProject }: DashboardProps) {
       /* keep row; operator can Refresh */
     }
   }, [refresh, t.projects]);
+
+  const groups = groupProjects(projects);
 
   return (
     <ScrollArea className="h-full">
@@ -81,41 +85,67 @@ export function Dashboard({ onSelectProject }: DashboardProps) {
         )}
 
         <div className="space-y-3">
-          {projects.map((p) => (
-            <div key={p.name} className="rounded-xl border border-border/30 bg-card hover:bg-hover transition-all p-5">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex items-start gap-2.5">
-                  <div className="mt-1.5"><HealthDot name={p.name} /></div>
+          {groups.map((group) =>
+            group.members.length >= 2 ? (
+              <section
+                key={group.key}
+                role="region"
+                aria-label={t.projects.conflict}
+                className="rounded-xl border border-border/50 bg-card p-5"
+              >
+                <div className="flex items-start justify-between gap-3 mb-3">
                   <div className="min-w-0">
-                    <h3 className="text-[14px] font-semibold text-foreground/90 mb-0.5">{p.name}</h3>
-                    <p className="text-[11px] text-foreground/20 font-mono truncate">{p.root_path}</p>
-                    <p className="text-[11px] text-foreground/35 mt-1">
-                      <span className="text-foreground/25 mr-1.5">{t.projects.lastIndexed}</span>
-                      <time dateTime={p.indexed_at} title={p.indexed_at}>
-                        {formatIndexedAt(p.indexed_at, lang)}
-                      </time>
+                    <p className="text-[11px] uppercase tracking-wide text-foreground/40 mb-1">
+                      {t.projects.conflict}
+                    </p>
+                    <p className="text-[11px] text-foreground/20 font-mono truncate">
+                      {group.newest.root_path}
                     </p>
                   </div>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
                   <button
-                    onClick={() => onSelectProject(p.name)}
-                    className="px-3 py-1.5 rounded-lg bg-primary/15 hover:bg-primary/25 text-primary text-[12px] font-medium transition-all"
+                    onClick={() => onSelectProject(group.newest.name)}
+                    className="px-3 py-1.5 rounded-lg bg-primary/15 hover:bg-primary/25 text-primary text-[12px] font-medium transition-all shrink-0"
                   >
                     {t.projects.enter}
                   </button>
-                  <button
-                    onClick={() => { void deleteProject(p.name); }}
-                    className="px-2 py-1.5 rounded-lg hover:bg-destructive/10 text-foreground/20 hover:text-destructive text-[12px] transition-all"
-                    title={t.projects.deleteTitle}
-                    aria-label={t.projects.deleteTitle}
-                  >
-                    ✕
-                  </button>
                 </div>
-              </div>
-            </div>
-          ))}
+                <ul className="space-y-3">
+                  {group.members.map((p) => (
+                    <li key={p.name} className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[14px] font-semibold text-foreground/90 mb-0.5">{p.name}</p>
+                        <p className="text-[11px] text-foreground/35">
+                          <span className="text-foreground/25 mr-1.5">{t.projects.lastIndexed}</span>
+                          <time dateTime={p.indexed_at} title={p.indexed_at}>
+                            {formatIndexedAt(p.indexed_at, lang)}
+                          </time>
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => { void deleteProject(p.name); }}
+                        className="px-2 py-1.5 rounded-lg hover:bg-destructive/10 text-foreground/20 hover:text-destructive text-[12px] transition-all shrink-0"
+                        title={t.projects.deleteNamed(p.name)}
+                        aria-label={t.projects.deleteNamed(p.name)}
+                      >
+                        ✕
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : (
+              <SoloProjectCard
+                key={group.newest.name}
+                project={group.newest}
+                lang={lang}
+                lastIndexedLabel={t.projects.lastIndexed}
+                enterLabel={t.projects.enter}
+                deleteTitle={t.projects.deleteTitle}
+                onEnter={onSelectProject}
+                onDelete={deleteProject}
+              />
+            ),
+          )}
         </div>
 
         <div className="border-t border-border/30 pt-8 mt-8">
@@ -129,5 +159,59 @@ export function Dashboard({ onSelectProject }: DashboardProps) {
         />
       )}
     </ScrollArea>
+  );
+}
+
+function SoloProjectCard({
+  project: p,
+  lang,
+  lastIndexedLabel,
+  enterLabel,
+  deleteTitle,
+  onEnter,
+  onDelete,
+}: {
+  project: Project;
+  lang: "en" | "zh";
+  lastIndexedLabel: string;
+  enterLabel: string;
+  deleteTitle: string;
+  onEnter: (name: string) => void;
+  onDelete: (name: string) => void;
+}) {
+  return (
+    <div className="rounded-xl border border-border/30 bg-card hover:bg-hover transition-all p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex items-start gap-2.5">
+          <div className="mt-1.5"><HealthDot name={p.name} /></div>
+          <div className="min-w-0">
+            <h3 className="text-[14px] font-semibold text-foreground/90 mb-0.5">{p.name}</h3>
+            <p className="text-[11px] text-foreground/20 font-mono truncate">{p.root_path}</p>
+            <p className="text-[11px] text-foreground/35 mt-1">
+              <span className="text-foreground/25 mr-1.5">{lastIndexedLabel}</span>
+              <time dateTime={p.indexed_at} title={p.indexed_at}>
+                {formatIndexedAt(p.indexed_at, lang)}
+              </time>
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={() => onEnter(p.name)}
+            className="px-3 py-1.5 rounded-lg bg-primary/15 hover:bg-primary/25 text-primary text-[12px] font-medium transition-all"
+          >
+            {enterLabel}
+          </button>
+          <button
+            onClick={() => { void onDelete(p.name); }}
+            className="px-2 py-1.5 rounded-lg hover:bg-destructive/10 text-foreground/20 hover:text-destructive text-[12px] transition-all"
+            title={deleteTitle}
+            aria-label={deleteTitle}
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -1,2 +1,2 @@
-role=@human-trainer task="Generate documentation for Task #5" next=@review spec=spec-001-w3q-executive-dashboard attempts=0 fails=0 mode=ADOPT status=IMPLEMENTING updated=2026-08-29T19:23:00Z subagent=available skill_v=1.4.0 tool=cursor mcp=available mcp_idx=no
-notes: last task coded
+role=@human-trainer task="Generate docs for Task #3" next=@review spec=spec-003-h7q-path-project-identity attempts=0 fails=0 mode=FEATURE status=IMPLEMENTING updated=2026-08-29T21:11:24Z subagent=available skill_v=1.4.0 tool=cursor mcp=available mcp_idx=no
+notes: Task #3 implementer done. Dashboard groups by canonical_root (root_path fallback); conflict Enter newest; per-name confirm-delete. 113 Vitest. No Reindex (Task #5). Constitution still draft.

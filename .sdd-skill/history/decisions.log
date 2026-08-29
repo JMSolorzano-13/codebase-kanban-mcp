@@ -1,0 +1,24 @@
+[2026-08-29T21:26:00Z] TASK #4 COMPLETE — spec-003 create 409 path_exists redirect + notice. CreateIndexModal+App 25 Vitest. No Reindex. Handoff @human-trainer.
+[2026-08-29T21:22:00Z] TASK #2 PASS DEV — spec-003. Review APPROVED. Tester 18 identity + 7 HTTP Gherkin (httpd 69). Handoff @implementer Task #3 Dashboard conflict groups.
+[2026-08-29T21:21:00Z] TASK #2 REVIEW APPROVED — spec-003 admit. Shared helper, 409 before slot, MCP bind name. No UNIQUE SQL. → @tester
+[2026-08-29T21:20:00Z] TASK #2 COMPLETE — spec-003 admit HTTP/MCP/jobs. 18 C identity + 7 new HTTP 409/202. No commit (held). Handoff @human-trainer.
+[2026-08-29T20:51:00Z] TASK #1 PASS DEV — spec-003. Review APPROVED. Tester 7 C + 8 Vitest. Handoff @implementer Task #2 admit HTTP/MCP/jobs.
+[2026-08-29T20:50:00Z] TASK #1 COMPLETE — spec-003 catalog + list_projects indexed_at/canonical_root. 7 C identity + 8 Vitest. Handoff @human-trainer. No HTTP 409 yet.
+[2026-08-29T20:40:00Z] PLAN APPROVED — spec-003-h7q-path-project-identity. User: "approved - start development". Handoff @implementer Task #1 catalog + list fields. Constitution still draft.
+[2026-08-29T20:32:00Z] PLAN READY — spec-003-h7q-path-project-identity. 5 tasks. C admission + Dashboard Reindex. SDD-ADR-014..018. awaiting_user_plan_approval. No @implementer dispatch.
+[2026-08-29T20:28:00Z] GHERKIN APPROVED — spec-003-h7q-path-project-identity. User: "approved" + Dashboard Reindex US-007. 7 stories. Handoff @architect. Constitution still draft.
+[2026-08-29T20:16:00Z] FEATURE NEW — spec-003-h7q-path-project-identity. Grill epic-003. Debt=TD-002. Status=draft. Gherkin gate.
+[2026-08-29T20:12:00Z] SPEC CLOSED — spec-002-p8w-project-workspace. Human: "read and understood". 5/5 tasks PASS DEV. KPI met. Constitution: no changes this spec (still draft pending user review). Next: /sdd-skill feature new <name>
+[2026-08-29T20:07:00Z] TASK #5 PASS DEV — spec-002 App compose. 16/16 App.test + 106 full suite. AdrButton deleted. Next: @human-trainer closeprep after review.
+[2026-08-29T20:06:00Z] TASK #3 PASS DEV — spec-002 Specs strip. fallbackSpecsToGraph + one-shot presence. App compose in #5.
+[2026-08-29T20:05:00Z] TASK #4 PASS DEV — spec-002 AdrTab. 5/5 Vitest. Review approved. Not mounted in App. Next: Task #5 after #3 review/tester.
+[2026-08-29T20:00:00Z] TASK #1 PASS DEV — spec-002 TabId + readRoute. 13/13 Vitest. Review approved. Next: Task #2 header (inline); #3 strip + #4 AdrTab parallel.
+[2026-08-29T19:56:00Z] PLAN APPROVED — spec-002-p8w-project-workspace. User: "approved - start development". Handoff @implementer Task #1 TabId + readRoute. Constitution still draft.
+[2026-08-29T19:55:00Z] PLAN READY — spec-002-p8w-project-workspace. 5 tasks. Stack unchanged (graph-ui React 19 + C HTTP). SDD-ADR-009..013. awaiting_user_plan_approval. No @implementer dispatch.
+[2026-08-29T19:46:00Z] GHERKIN APPROVED — spec-002-p8w-project-workspace. User: "approved". 6 stories. Handoff @architect. Constitution still draft.
+[2026-08-29T20:00:00Z] FEATURE NEW — spec-002-p8w-project-workspace. Grill epic-002. Debt=no (TD-002 deferred to spec-003). Status=draft. Gherkin gate.
+[2026-08-29T19:50:00Z] SPEC CLOSED — spec-001-w3q-executive-dashboard. Human: "/read and understood- close spec". 5/5 tasks PASS DEV. KPI met. Constitution: no changes this spec (still draft pending user review). TD-001, TD-003, TD-004 resolved. Next: /sdd-skill feature new <name>
+[2026-08-29T18:50:00Z] PLAN APPROVED — spec-001-w3q-executive-dashboard. User: "approved start development". Handoff @implementer Task #1 useProjects list-only. Constitution still draft.
+[2026-08-29T18:45:00Z] PLAN READY — spec-001-w3q-executive-dashboard. 5 tasks. Stack unchanged (graph-ui React 19 + C HTTP). SDD-ADR-002..008. awaiting_user_plan_approval. No @implementer dispatch.
+[2026-08-29T18:31:00Z] GHERKIN APPROVED — spec-001-w3q-executive-dashboard. User: "scenarios approved". 6 stories. Handoff @architect. Constitution still draft.
+[2026-08-29T18:24:00Z] INIT ADOPT — SDD v1.4.0 on existing codebase-memory-mcp. First spec is grill epic-001 executive-dashboard (spec-001-w3q), not spec-001-consolidate. Grill plan already documented product + stack; adopt interview skipped. Source: .grill/plans/executive-ui-ia/

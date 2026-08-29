@@ -1,12 +1,12 @@
 /**
- * @sdd-task: Task #3 - Dashboard conflict group + Enter newest + delete older
+ * @sdd-task: Task #4 - Create modal path_exists redirect + notice
  * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
- * @sdd-decision: SDD-ADR-016 - group on list canonical_root; newest matches C catalog
- * @sdd-why: Lock group key fallback and newest/tie so Dashboard Enter cannot drift from C
- * @human-debug: If tie picks alpha over beta → JS compare is not greater-name; if slash clones split → key used root_path while canonical_root was set
+ * @sdd-decision: SDD-ADR-016 - list canonical_root is the skip/group key
+ * @sdd-why: Lock findNewestForPath so create skip matches Dashboard newest
+ * @human-debug: If skip misses trailing slash → foldPathKey; if older name wins → pickNewest
  */
 import { describe, expect, it } from "vitest";
-import { groupKey, groupProjects, pickNewest } from "./pathGroups";
+import { findNewestForPath, groupKey, groupProjects, pickNewest } from "./pathGroups";
 import type { Project } from "./types";
 
 function p(partial: Partial<Project> & Pick<Project, "name">): Project {
@@ -49,5 +49,12 @@ describe("pathGroups", () => {
     const beta = p({ name: "beta", indexed_at: "2026-08-29T10:00:00Z" });
     expect(pickNewest([alpha, beta]).name).toBe("beta");
     expect(pickNewest([beta, alpha]).name).toBe("beta");
+  });
+
+  it("finds newest owner for a listed Path including trailing slash", () => {
+    const older = p({ name: "alpha-old", indexed_at: "2026-08-28T10:00:00Z", canonical_root: "/tmp/alpha" });
+    const newer = p({ name: "alpha", indexed_at: "2026-08-29T10:00:00Z", canonical_root: "/tmp/alpha" });
+    expect(findNewestForPath([older, newer], "/tmp/alpha/")?.name).toBe("alpha");
+    expect(findNewestForPath([newer], "/tmp/other")).toBeUndefined();
   });
 });

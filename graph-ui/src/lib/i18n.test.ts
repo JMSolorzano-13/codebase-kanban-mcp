@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #3 - Dashboard conflict group + Enter newest + delete older
+ * @sdd-task: Task #4 - Create modal path_exists redirect + notice
  * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
- * @sdd-decision: SDD-ADR-016 - conflict copy on Dashboard groups
- * @sdd-why: Lock projects.conflict and deleteNamed in en+zh for conflict Delete controls
- * @human-debug: If conflict region has no English name → messages.en.projects.conflict drifted
+ * @sdd-decision: SDD-ADR-015 - path_exists notice copy in en+zh
+ * @sdd-why: Lock index.pathExistsNotice so App status text cannot drift
+ * @human-debug: If notice lacks "alpha" → pathExistsNotice interpolates name
  */
 import { describe, expect, it } from "vitest";
 import { detectLanguage, messages } from "./i18n";
@@ -64,5 +64,7 @@ describe("i18n", () => {
     expect(messages.zh.projects.conflict).toBe("路径冲突");
     expect(messages.en.projects.deleteNamed("a1")).toBe("Delete a1");
     expect(messages.zh.projects.deleteNamed("a1")).toBe("删除 a1");
+    expect(messages.en.index.pathExistsNotice("alpha")).toBe("Already indexed as alpha");
+    expect(messages.zh.index.pathExistsNotice("alpha")).toBe("已索引为 alpha");
   });
 });

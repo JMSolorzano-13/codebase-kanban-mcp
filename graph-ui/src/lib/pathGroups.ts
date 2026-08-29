@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #3 - Dashboard conflict group + Enter newest + delete older
+ * @sdd-task: Task #4 - Create modal path_exists redirect + notice
  * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
- * @sdd-decision: SDD-ADR-016 - group on list canonical_root; newest matches C catalog
- * @sdd-why: Legacy same-Path clones must fold in UI without a JS realpath
- * @human-debug: If two clones stay as solo rows → canonical_root/root_path key mismatch; if Enter opens the older → pickNewest strcmp drifted from identity.c
+ * @sdd-decision: SDD-ADR-016 - list canonical_root is the skip/group key
+ * @sdd-why: Optional create skip uses the same newest pick as Dashboard conflict
+ * @human-debug: If skip misses a listed Path → foldPathKey vs canonical_root mismatch
  */
 import type { Project } from "./types";
 
@@ -35,6 +35,24 @@ export function pickNewest(members: readonly Project[]): Project {
 
 export function groupKey(p: Project): string {
   return p.canonical_root || p.root_path;
+}
+
+/** Trailing-slash fold only — not a JS realpath (server owns canonical_root). */
+export function foldPathKey(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  return trimmed.length > 0 ? trimmed : path;
+}
+
+/** Newest list row whose canonical_root or root_path matches Path. */
+export function findNewestForPath(projects: readonly Project[], path: string): Project | undefined {
+  if (!path) return undefined;
+  const folded = foldPathKey(path);
+  const matches = projects.filter((p) => {
+    const keys = [p.canonical_root, p.root_path].filter((k): k is string => Boolean(k));
+    return keys.some((k) => k === path || foldPathKey(k) === folded);
+  });
+  if (matches.length === 0) return undefined;
+  return pickNewest(matches);
 }
 
 /** First-seen key order so Dashboard list order stays stable. */

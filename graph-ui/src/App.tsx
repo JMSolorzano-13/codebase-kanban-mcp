@@ -1,67 +1,96 @@
 /**
- * @sdd-task: Task #5 - App routing + TabBar delete
- * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
- * @sdd-decision: SDD-ADR-008 - TabId dashboard|graph; stats/control/specs alias home
- * @sdd-why: Account home is Dashboard; Graph is Enter/deep-link only; no lab tab strip
- * @human-debug: If Specs opens on load → readRoute still defaults to specs; if Graph without project → missing project guard
+ * @sdd-task: Task #4 - Create modal path_exists redirect + notice
+ * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
+ * @sdd-decision: SDD-ADR-015 - 409 path_exists opens Graph; name_exists stays in the modal
+ * @sdd-why: US-001 redirect + status notice; notice clears on the next navigate
+ * @human-debug: If 409 path_exists stays on Dashboard → line 142 (onPathExists); if notice survives leave → line 44 (navigate did not clear pathNotice)
  */
 import { useCallback, useEffect, useState } from "react";
-import { GraphTab } from "./components/GraphTab";
+import { AdrTab } from "./components/AdrTab";
 import { Dashboard } from "./components/Dashboard";
-import type { TabId } from "./lib/types";
+import { GraphTab } from "./components/GraphTab";
+import { SpecBoardTab } from "./components/SpecBoardTab";
+import { WorkspaceHeader } from "./components/WorkspaceHeader";
+import { WorkspaceTabStrip } from "./components/WorkspaceTabStrip";
+import { useSddSkillPresent } from "./hooks/useSddSkillPresent";
 import { useUiMessages } from "./lib/i18n";
-
-interface RouteState {
-  tab: TabId;
-  project: string | null;
-}
-
-/* Graph only when both tab=graph and a non-empty project; every other
- * query (missing, unknown, stats, control, specs) is Dashboard with
- * project cleared so old bookmarks cannot keep a stale selection. */
-function readRoute(): RouteState {
-  const params = new URLSearchParams(window.location.search);
-  const rawTab = params.get("tab");
-  const project = params.get("project");
-  if (rawTab === "graph" && project) {
-    return { tab: "graph", project };
-  }
-  return { tab: "dashboard", project: null };
-}
-
-function routeUrl(tab: TabId, project: string | null): string {
-  const params = new URLSearchParams();
-  params.set("tab", tab);
-  if (project) params.set("project", project);
-  return `${window.location.pathname}?${params.toString()}${window.location.hash}`;
-}
+import { fallbackSpecsToGraph, readRoute, routeUrl, type RouteState } from "./lib/route";
+import { isWorkspaceTab, type TabId, type WorkspaceTabId } from "./lib/types";
 
 export function App() {
   const t = useUiMessages();
   const [route, setRoute] = useState<RouteState>(readRoute);
+  const [adrDirty, setAdrDirty] = useState(false);
+  const [pathNotice, setPathNotice] = useState<string | null>(null);
   const { tab: activeTab, project: selectedProject } = route;
+  const inWorkspace = Boolean(selectedProject) && isWorkspaceTab(activeTab);
+  const { present } = useSddSkillPresent(inWorkspace ? selectedProject : null);
 
-  /* First load writes the canonical query. Dashboard never keeps project=. */
   useEffect(() => {
     const initial = readRoute();
     window.history.replaceState(null, "", routeUrl(initial.tab, initial.project));
   }, []);
 
   useEffect(() => {
-    const onPopState = () => setRoute(readRoute());
+    const onPopState = () => {
+      setPathNotice(null);
+      setRoute(readRoute());
+    };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
   const navigate = useCallback((tab: TabId, project: string | null) => {
+    setPathNotice(null);
     const url = routeUrl(tab, project);
     const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    if (url === current) return;
+    if (url === current) {
+      setRoute({ tab, project });
+      return;
+    }
     window.history.pushState(null, "", url);
     setRoute({ tab, project });
   }, []);
 
-  const showGraph = activeTab === "graph" && Boolean(selectedProject);
+  const openExistingProject = useCallback((name: string) => {
+    setPathNotice(name);
+    const url = routeUrl("graph", name);
+    const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (url !== current) {
+      window.history.pushState(null, "", url);
+    }
+    setRoute({ tab: "graph", project: name });
+  }, []);
+
+  const replaceRoute = useCallback((tab: TabId, project: string | null) => {
+    window.history.replaceState(null, "", routeUrl(tab, project));
+    setRoute({ tab, project });
+  }, []);
+
+  /* Omit-until-true: specs URL becomes graph immediately, including while loading. */
+  useEffect(() => {
+    if (!selectedProject || !isWorkspaceTab(activeTab)) return;
+    const next = fallbackSpecsToGraph(activeTab, present);
+    if (next === activeTab) return;
+    replaceRoute(next, selectedProject);
+  }, [activeTab, present, selectedProject, replaceRoute]);
+
+  const requestNavigate = useCallback(
+    (tab: TabId, project: string | null) => {
+      if (adrDirty && !window.confirm(t.adr.unsavedConfirm)) return;
+      navigate(tab, project);
+    },
+    [adrDirty, navigate, t.adr.unsavedConfirm],
+  );
+
+  useEffect(() => {
+    if (activeTab !== "adr") setAdrDirty(false);
+  }, [activeTab]);
+
+  const paneTab: WorkspaceTabId =
+    selectedProject && isWorkspaceTab(activeTab)
+      ? (fallbackSpecsToGraph(activeTab, present) as WorkspaceTabId)
+      : "graph";
 
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
@@ -73,31 +102,45 @@ export function App() {
           </span>
         </div>
 
-        {showGraph && (
-          <div className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white/[0.04] border border-border/30">
-            <span className="text-[10px] text-foreground/30 uppercase tracking-wider">
-              {t.graph.selectedLabel}
-            </span>
-            <span className="text-[11px] text-primary font-mono truncate max-w-[300px]">
-              {selectedProject}
-            </span>
-            <button
-              type="button"
-              aria-label={t.graph.backToDashboard}
-              onClick={() => navigate("dashboard", null)}
-              className="text-foreground/20 hover:text-foreground/50 text-[12px] ml-1 transition-colors"
-            >
-              ×
-            </button>
-          </div>
-        )}
+        {inWorkspace && selectedProject ? (
+          <WorkspaceHeader
+            projectName={selectedProject}
+            onLeave={() => requestNavigate("dashboard", null)}
+          />
+        ) : null}
       </header>
 
+      {inWorkspace && selectedProject ? (
+        <WorkspaceTabStrip
+          selected={paneTab}
+          showSpecs={present}
+          onSelect={(tab) => requestNavigate(tab, selectedProject)}
+        />
+      ) : null}
+
+      {pathNotice ? (
+        <div
+          role="status"
+          className="px-5 py-2 border-b border-border bg-card text-[12px] text-foreground/70"
+        >
+          {t.index.pathExistsNotice(pathNotice)}
+        </div>
+      ) : null}
+
       <main className="flex-1 min-h-0">
-        {showGraph ? (
-          <GraphTab project={selectedProject} />
+        {inWorkspace && selectedProject ? (
+          paneTab === "specs" && present ? (
+            <SpecBoardTab project={selectedProject} onSelectProject={() => undefined} />
+          ) : paneTab === "adr" ? (
+            <AdrTab project={selectedProject} onDirtyChange={setAdrDirty} />
+          ) : (
+            <GraphTab project={selectedProject} />
+          )
         ) : (
-          <Dashboard onSelectProject={(p) => navigate("graph", p)} />
+          <Dashboard
+            onSelectProject={(p) => navigate("graph", p)}
+            onPathExists={openExistingProject}
+          />
         )}
       </main>
     </div>

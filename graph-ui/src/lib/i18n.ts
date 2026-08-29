@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #3 - Dashboard conflict group + Enter newest + delete older
+ * @sdd-task: Task #4 - Create modal path_exists redirect + notice
  * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
- * @sdd-decision: SDD-ADR-016 - conflict copy on Dashboard groups
- * @sdd-why: US-004/005 conflict region and per-name Delete need en+zh accessible names
- * @human-debug: If conflict region has no name → messages.*.projects.conflict missing; if Delete a1 missing → deleteNamed
+ * @sdd-decision: SDD-ADR-015 - bare POST is create; path_exists notice is not a reindex
+ * @sdd-why: US-001 status notice must name the existing project in en+zh
+ * @human-debug: If Graph has no English notice → messages.en.index.pathExistsNotice missing
  */
 import { useEffect, useState } from "react";
 
@@ -69,6 +69,7 @@ export const messages = {
       starting: "Starting...",
       browseRoot: (path: string) => `Browse ${path}`,
       indexDirectory: (name: string) => `Index ${name}`,
+      pathExistsNotice: (name: string) => `Already indexed as ${name}`,
     },
     adr: {
       title: "Architecture Decision Record",
@@ -164,6 +165,7 @@ export const messages = {
       starting: "启动中...",
       browseRoot: (path: string) => `浏览 ${path}`,
       indexDirectory: (name: string) => `索引 ${name}`,
+      pathExistsNotice: (name: string) => `已索引为 ${name}`,
     },
     adr: {
       title: "架构决策记录",

@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #3 - Dashboard conflict group + Enter newest + delete older
+ * @sdd-task: Task #4 - Create modal path_exists redirect + notice
  * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
- * @sdd-decision: SDD-ADR-016 - Dashboard groups by list canonical_root
- * @sdd-why: US-004/005 — conflict region, Enter newest, confirm-delete older only
- * @human-debug: If Enter opens the older name → pickNewest; if Path repeats per clone → group header missing; if two names vanish on one click → a multi-delete control was added
+ * @sdd-decision: SDD-ADR-015 - create modal never reindexes; path_exists leaves Dashboard
+ * @sdd-why: Wire onPathExists + listed Path skip so 409 does not call onCreated
+ * @human-debug: If path_exists shows IndexProgress → onCreated still used; if skip POSTs → existingProjects not passed
  */
 import { useCallback, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -19,9 +19,10 @@ import { IndexProgress } from "./IndexProgress";
 
 interface DashboardProps {
   onSelectProject: (project: string) => void;
+  onPathExists?: (project: string) => void;
 }
 
-export function Dashboard({ onSelectProject }: DashboardProps) {
+export function Dashboard({ onSelectProject, onPathExists }: DashboardProps) {
   const t = useUiMessages();
   const lang = useUiLanguage();
   const { projects, loading, error, refresh } = useProjects();
@@ -156,6 +157,11 @@ export function Dashboard({ onSelectProject }: DashboardProps) {
         <CreateIndexModal
           onClose={() => setShowModal(false)}
           onCreated={() => { setIndexing(true); refresh(); }}
+          onPathExists={(name) => {
+            setShowModal(false);
+            onPathExists?.(name);
+          }}
+          existingProjects={projects}
         />
       )}
     </ScrollArea>

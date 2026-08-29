@@ -1,13 +1,15 @@
 /**
- * @sdd-task: Task #4 - Dashboard page: list + Control + create-index
- * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
- * @sdd-decision: SDD-ADR-007 - Create-index POST root_path only
- * @sdd-why: Name is derived from path in C; Project ID field created aliases
- * @human-debug: If POST has project_name → leftover state; 400 stays open and shows body.error
+ * @sdd-task: Task #4 - Create modal path_exists redirect + notice
+ * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
+ * @sdd-decision: SDD-ADR-015 - Create POST is {root_path} only; 409 path_exists is not a reindex
+ * @sdd-why: Owned Path must close the modal and hand existing_project to App — never 202-then-redirect
+ * @human-debug: If path_exists starts IndexProgress → line 133 (onCreated); if name_exists leaves modal → line 127 (code treated as path_exists)
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useUiMessages } from "../lib/i18n";
+import { findNewestForPath } from "../lib/pathGroups";
+import type { Project } from "../lib/types";
 
 interface BrowsePayload {
   error?: string;
@@ -19,6 +21,15 @@ interface BrowsePayload {
 
 interface IndexErrorPayload {
   error?: string;
+  code?: string;
+  existing_project?: string;
+}
+
+interface CreateIndexModalProps {
+  onClose: () => void;
+  onCreated: () => void;
+  onPathExists: (project: string) => void;
+  existingProjects?: readonly Project[];
 }
 
 function joinPath(base: string, dir: string): string {
@@ -28,7 +39,12 @@ function joinPath(base: string, dir: string): string {
   return `${base.replace(/[\\/]+$/, "")}${slash}${dir}`;
 }
 
-export function CreateIndexModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+export function CreateIndexModal({
+  onClose,
+  onCreated,
+  onPathExists,
+  existingProjects = [],
+}: CreateIndexModalProps) {
   const t = useUiMessages();
   const [currentPath, setCurrentPath] = useState("");
   const [dirs, setDirs] = useState<string[]>([]);
@@ -92,6 +108,13 @@ export function CreateIndexModal({ onClose, onCreated }: { onClose: () => void; 
 
   const submit = async (path = currentPath) => {
     if (!path) return;
+    /* List already owns this Path: same Graph + notice as 409, without a 202. */
+    const listed = findNewestForPath(existingProjects, path);
+    if (listed) {
+      onPathExists(listed.name);
+      onClose();
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -101,6 +124,11 @@ export function CreateIndexModal({ onClose, onCreated }: { onClose: () => void; 
         body: JSON.stringify({ root_path: path }),
       });
       const data = (await res.json()) as IndexErrorPayload;
+      if (res.status === 409 && data.code === "path_exists" && data.existing_project) {
+        onPathExists(data.existing_project);
+        onClose();
+        return;
+      }
       if (!res.ok) throw new Error(data.error ?? "Failed");
       onCreated();
       onClose();

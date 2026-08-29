@@ -1,3 +1,10 @@
+/**
+ * @sdd-task: Task #2 - Grayscale chrome tokens + palette lock
+ * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
+ * @sdd-decision: SDD-ADR-005 - Chrome grayscale; lock colorForLabel and EdgeLines hex
+ * @sdd-why: Export CALLS/default for CI lock; hex maps stay byte-identical
+ * @human-debug: If CALLS is gray → someone "fixed" the graph map to match chrome
+ */
 import { useMemo } from "react";
 import * as THREE from "three";
 import type { GraphNode, GraphEdge } from "../lib/types";
@@ -50,6 +57,11 @@ const EDGE_TYPE_COLORS: Record<string, string> = {
 };
 
 const DEFAULT_EDGE_COLOR = "#1C8585";
+
+export const GRAPH_EDGE_PALETTE = {
+  CALLS: EDGE_TYPE_COLORS.CALLS,
+  DEFAULT_EDGE_COLOR,
+} as const;
 
 export function EdgeLines({
   nodes,

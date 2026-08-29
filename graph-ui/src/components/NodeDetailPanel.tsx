@@ -1,3 +1,10 @@
+/**
+ * @sdd-task: Task #2 - Grayscale chrome tokens + palette lock
+ * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
+ * @sdd-decision: SDD-ADR-005 - Chrome grayscale; lock colorForLabel and EdgeLines hex
+ * @sdd-why: Detail panel is chrome; node chips still use colorForLabel hex
+ * @human-debug: If panel is teal-black → leftover hardcoded panel hex; chip hue from colorForLabel
+ */
 import { useMemo, useState, useEffect } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { colorForLabel } from "../lib/colors";
@@ -112,7 +119,7 @@ export function NodeDetailPanel({
   };
 
   return (
-    <div className="w-full bg-[#0b1920]/95 backdrop-blur-xl flex flex-col h-full min-h-0 overflow-hidden">
+    <div className="w-full bg-card/95 backdrop-blur-xl flex flex-col h-full min-h-0 overflow-hidden">
       {/* Header */}
       <div className="px-4 pt-4 pb-3 border-b border-border/30">
         <div className="flex items-start justify-between gap-2 mb-2">

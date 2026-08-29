@@ -1,6 +1,13 @@
 # Dev Log
-Updated: 2026-08-29T19:00:00Z
-Active Spec: spec-001-w3q-executive-dashboard / Current Task: Task #1 done → @human-trainer / Total Tasks Completed: 1 / Branch: local working tree
+Updated: 2026-08-29T18:55:00Z
+Active Spec: spec-001-w3q-executive-dashboard / Current Task: Task #2 done → @human-trainer / Total Tasks Completed: 2 / Branch: local working tree
+
+## [2026-08-29] — Task #2 grayscale chrome + palette lock
+- globals.css primary/accent/ring gray; --color-hover; surfaces distinct
+- Gauge healthy #a3a3a3; >80 red >50 amber; GRAPH_EDGE_PALETTE export
+- Chrome panels bg-card; colors.ts + graph-loader #22d3ee unchanged
+- Validation: `cd graph-ui && npx vitest run` → 12 files, 54 tests pass
+- Next: @human-trainer docs for Task #2; #3 still pending
 
 ## [2026-08-29] — Task #1 useProjects list-only (TD-001)
 - useProjects: list_projects only; return { projects: Project[], loading, error, refresh }
@@ -35,6 +42,6 @@ Adopt init. Architect plan written; waiting approval.
 none this init
 
 ## Next Steps
-1. @human-trainer docs for Task #1 → @review
-2. Tasks #2 chrome tokens and #3 formatIndexedAt (parallel)
+1. @human-trainer docs for Task #2 → @review
+2. Task #3 formatIndexedAt (parallel-ready)
 3. Task #4 Dashboard after #1 #2 #3

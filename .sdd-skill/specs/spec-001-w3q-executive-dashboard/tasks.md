@@ -28,15 +28,15 @@ Implementation Notes: Do not keep `schema: null` placeholders if that invites a 
 
 ### Task #2 — Grayscale chrome tokens + palette lock (TD-004, US-004)
 Definition of Done:
-- [ ] `globals.css` `--color-primary` / `--color-accent` / `--color-ring` are not `#1DA27E` / `#1C8585`
-- [ ] Surfaces have distinct gray levels (background / card / hover / border) per plan D8
-- [ ] Control `Gauge` healthy fill is not `#1DA27E`; >80 red and >50 amber stay
-- [ ] App header / modal / HealthDot tooltip / IndexProgress chrome drop hardcoded `#0b1920` / `#0e2028` (or whatever this task can reach; Dashboard files in #4 must use tokens from the start)
-- [ ] GraphTab / NodeDetailPanel / DisplaySettingsMenu chrome panels use `bg-card` (not canvas)
-- [ ] `colors.ts` unchanged; `colors.test.ts` locks `colorForLabel("Function") === "#06b6d4"` and the rest of `LABEL_COLORS`
-- [ ] EdgeLines `CALLS` / default hex still `#1DA27E` / `#1C8585` (export for test; do not change values)
-- [ ] graph-loader `#22d3ee` untouched
-- [ ] tests pass; breadcrumbs
+- [x] `globals.css` `--color-primary` / `--color-accent` / `--color-ring` are not `#1DA27E` / `#1C8585`
+- [x] Surfaces have distinct gray levels (background / card / hover / border) per plan D8
+- [x] Control `Gauge` healthy fill is not `#1DA27E`; >80 red and >50 amber stay
+- [x] App header / modal / HealthDot tooltip / IndexProgress chrome drop hardcoded `#0b1920` / `#0e2028` (or whatever this task can reach; Dashboard files in #4 must use tokens from the start)
+- [x] GraphTab / NodeDetailPanel / DisplaySettingsMenu chrome panels use `bg-card` (not canvas)
+- [x] `colors.ts` unchanged; `colors.test.ts` locks `colorForLabel("Function") === "#06b6d4"` and the rest of `LABEL_COLORS`
+- [x] EdgeLines `CALLS` / default hex still `#1DA27E` / `#1C8585` (export for test; do not change values)
+- [x] graph-loader `#22d3ee` untouched
+- [x] tests pass; breadcrumbs
 User Stories Addressed: US-004
 Gherkin covered: Graph deep link — `colorForLabel("Function")` hex lock
 Dependencies: None
@@ -119,7 +119,7 @@ Implementation Notes: `replaceState` on first load writes `?tab=dashboard` witho
 ## Task Summary Table
 | Task # | Name | Effort | Dependencies | Subagent | Path | Status |
 | 1 | useProjects list-only | 2h | None | no | full | done |
-| 2 | Chrome tokens + palette lock | 2h | None | no | full | pending |
+| 2 | Chrome tokens + palette lock | 2h | None | no | full | done |
 | 3 | formatIndexedAt | 1h | None | no | compact | pending |
 | 4 | Dashboard page | 5h | #1 #2 #3 | yes | full | pending |
 | 5 | App routing + TabBar delete | 3h | #4 | no | full | pending |

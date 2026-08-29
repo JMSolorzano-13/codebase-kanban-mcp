@@ -1,3 +1,10 @@
+/**
+ * @sdd-task: Task #2 - Grayscale chrome tokens + palette lock
+ * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
+ * @sdd-decision: SDD-ADR-005 - Chrome grayscale; lock colorForLabel and EdgeLines hex
+ * @sdd-why: Sidebar/toolbar panels are chrome, not canvas — bg-card not hardcoded teal-black
+ * @human-debug: If sidebar is teal-black → leftover hardcoded panel hex; 3D hues come from colorForLabel
+ */
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -392,7 +399,7 @@ export function GraphTab({ project }: GraphTabProps) {
     <div className="h-full flex">
       {/* Left sidebar — resizable */}
       <div
-        className="border-r border-border/30 flex flex-col h-full bg-[#0b1920]/90 backdrop-blur-md shrink-0"
+        className="border-r border-border/30 flex flex-col h-full bg-card/90 backdrop-blur-md shrink-0"
         style={{ width: leftWidth }}
       >
         <FilterPanel
@@ -495,7 +502,7 @@ export function GraphTab({ project }: GraphTabProps) {
                   Clear selection
                 </Button>
               )}
-              <div className="flex items-center gap-1.5 h-8 px-2 rounded-md border border-border/50 bg-[#0b1920]/80 backdrop-blur-sm">
+              <div className="flex items-center gap-1.5 h-8 px-2 rounded-md border border-border/50 bg-card/80 backdrop-blur-sm">
                 <label
                   htmlFor="node-budget"
                   className="text-[10px] uppercase tracking-wider text-white/40"

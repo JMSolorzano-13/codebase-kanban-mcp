@@ -1,7 +1,21 @@
+/**
+ * @sdd-task: Task #2 - Grayscale chrome tokens + palette lock
+ * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
+ * @sdd-decision: SDD-ADR-005 - Chrome grayscale; lock colorForLabel and EdgeLines hex
+ * @sdd-why: Gauge healthy fill was teal chrome; >80 red and >50 amber stay semantic
+ * @human-debug: If healthy bar is teal → gaugeFillColor still returns old accent hex
+ */
 import { useState, useEffect, useCallback } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ProcessInfo } from "../lib/types";
 import { useUiMessages } from "../lib/i18n";
+
+/* Healthy fill is gray chrome; thresholds stay semantic (plan D8). */
+export function gaugeFillColor(pct: number): string {
+  if (pct > 80) return "#e05252";
+  if (pct > 50) return "#eab308";
+  return "#a3a3a3";
+}
 
 /* ── Gauge component ────────────────────────────────────── */
 
@@ -18,7 +32,7 @@ function Gauge({ label, value, max, unit, color }: {
       <div className="mt-2 h-1.5 rounded-full bg-white/[0.05] overflow-hidden">
         <div
           className="h-full rounded-full transition-all duration-500"
-          style={{ width: `${pct}%`, backgroundColor: pct > 80 ? "#e05252" : pct > 50 ? "#eab308" : "#1DA27E" }}
+          style={{ width: `${pct}%`, backgroundColor: gaugeFillColor(pct) }}
         />
       </div>
     </div>

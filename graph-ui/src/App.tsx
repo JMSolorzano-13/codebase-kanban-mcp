@@ -1,38 +1,34 @@
 /**
- * @sdd-task: Task #2 - Grayscale chrome tokens + palette lock
+ * @sdd-task: Task #5 - App routing + TabBar delete
  * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
- * @sdd-decision: SDD-ADR-005 - Chrome grayscale; lock colorForLabel and EdgeLines hex
- * @sdd-why: Header chrome used hardcoded teal-black; token surfaces only
- * @human-debug: If header is teal-black → leftover hardcoded panel hex; routing is Task #5
+ * @sdd-decision: SDD-ADR-008 - TabId dashboard|graph; stats/control/specs alias home
+ * @sdd-why: Account home is Dashboard; Graph is Enter/deep-link only; no lab tab strip
+ * @human-debug: If Specs opens on load → readRoute still defaults to specs; if Graph without project → missing project guard
  */
 import { useCallback, useEffect, useState } from "react";
 import { GraphTab } from "./components/GraphTab";
 import { Dashboard } from "./components/Dashboard";
-import { ControlTab } from "./components/ControlTab";
-import { SpecBoardTab } from "./components/SpecBoardTab";
 import type { TabId } from "./lib/types";
 import { useUiMessages } from "./lib/i18n";
-
-/* "specs" first: the Kanban is meant to be the first thing you see on open —
- * a quick-glance view of what sdd-skill is doing on the selected project. */
-const TAB_IDS: TabId[] = ["specs", "graph", "stats", "control"];
 
 interface RouteState {
   tab: TabId;
   project: string | null;
 }
 
-/* Read the active tab + selected project from the URL query string so the
- * current view survives refreshes and can be bookmarked or shared. */
+/* Graph only when both tab=graph and a non-empty project; every other
+ * query (missing, unknown, stats, control, specs) is Dashboard with
+ * project cleared so old bookmarks cannot keep a stale selection. */
 function readRoute(): RouteState {
   const params = new URLSearchParams(window.location.search);
   const rawTab = params.get("tab");
-  const tab = TAB_IDS.includes(rawTab as TabId) ? (rawTab as TabId) : "specs";
   const project = params.get("project");
-  return { tab, project: project ? project : null };
+  if (rawTab === "graph" && project) {
+    return { tab: "graph", project };
+  }
+  return { tab: "dashboard", project: null };
 }
 
-/* Build the canonical URL for a route, preserving the path and hash. */
 function routeUrl(tab: TabId, project: string | null): string {
   const params = new URLSearchParams();
   params.set("tab", tab);
@@ -45,20 +41,18 @@ export function App() {
   const [route, setRoute] = useState<RouteState>(readRoute);
   const { tab: activeTab, project: selectedProject } = route;
 
-  /* Normalize the URL on first load so it always carries the current route. */
+  /* First load writes the canonical query. Dashboard never keeps project=. */
   useEffect(() => {
     const initial = readRoute();
     window.history.replaceState(null, "", routeUrl(initial.tab, initial.project));
   }, []);
 
-  /* Sync state when the user navigates with the browser back/forward buttons. */
   useEffect(() => {
     const onPopState = () => setRoute(readRoute());
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  /* Change the route and push a history entry (skips no-op navigations). */
   const navigate = useCallback((tab: TabId, project: string | null) => {
     const url = routeUrl(tab, project);
     const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -67,51 +61,19 @@ export function App() {
     setRoute({ tab, project });
   }, []);
 
-  const tabs: { id: TabId; label: string }[] = [
-    { id: "specs", label: t.tabs.specs },
-    { id: "graph", label: t.tabs.graph },
-    { id: "stats", label: t.tabs.projects },
-    { id: "control", label: t.tabs.control },
-  ];
+  const showGraph = activeTab === "graph" && Boolean(selectedProject);
 
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
-      {/* Header */}
       <header className="flex items-center justify-between px-5 h-12 border-b border-border bg-card/80 backdrop-blur-md shrink-0">
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-2.5">
-            <div className="w-[7px] h-[7px] rounded-full bg-primary" />
-            <span className="text-[13px] font-semibold text-foreground/90 tracking-tight">
-              Codebase Memory
-            </span>
-          </div>
-
-          {/* Tabs inline in header */}
-          <nav className="flex items-center gap-0.5">
-            {tabs.map((tab) => {
-              const disabled = tab.id === "graph" && !selectedProject;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => navigate(tab.id, tab.id === "stats" ? null : selectedProject)}
-                  disabled={disabled}
-                  title={disabled ? "Select a project first" : undefined}
-                  className={`px-3 py-1 rounded-md text-[12px] font-medium transition-all ${
-                    disabled
-                      ? "text-muted-foreground/30 cursor-not-allowed"
-                      : activeTab === tab.id
-                        ? "bg-primary/15 text-primary"
-                        : "text-muted-foreground hover:text-foreground hover:bg-white/[0.04]"
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              );
-            })}
-          </nav>
+        <div className="flex items-center gap-2.5">
+          <div className="w-[7px] h-[7px] rounded-full bg-primary" />
+          <span className="text-[13px] font-semibold text-foreground/90 tracking-tight">
+            Codebase Memory
+          </span>
         </div>
 
-        {selectedProject && (
+        {showGraph && (
           <div className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white/[0.04] border border-border/30">
             <span className="text-[10px] text-foreground/30 uppercase tracking-wider">
               {t.graph.selectedLabel}
@@ -120,7 +82,9 @@ export function App() {
               {selectedProject}
             </span>
             <button
-              onClick={() => navigate("stats", null)}
+              type="button"
+              aria-label={t.graph.backToDashboard}
+              onClick={() => navigate("dashboard", null)}
               className="text-foreground/20 hover:text-foreground/50 text-[12px] ml-1 transition-colors"
             >
               ×
@@ -129,21 +93,11 @@ export function App() {
         )}
       </header>
 
-      {/* Content */}
       <main className="flex-1 min-h-0">
-        {activeTab === "specs" ? (
-          <SpecBoardTab
-            project={selectedProject}
-            onSelectProject={(p) => navigate("specs", p)}
-          />
-        ) : activeTab === "graph" ? (
+        {showGraph ? (
           <GraphTab project={selectedProject} />
-        ) : activeTab === "control" ? (
-          <ControlTab />
         ) : (
-          <Dashboard
-            onSelectProject={(p) => navigate("graph", p)}
-          />
+          <Dashboard onSelectProject={(p) => navigate("graph", p)} />
         )}
       </main>
     </div>

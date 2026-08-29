@@ -1,6 +1,13 @@
 # Dev Log
-Updated: 2026-08-29T19:15:00Z
-Active Spec: spec-001-w3q-executive-dashboard / Current Task: Task #4 done → @human-trainer / Total Tasks Completed: 4 / Branch: local working tree
+Updated: 2026-08-29T19:23:00Z
+Active Spec: spec-001-w3q-executive-dashboard / Current Task: Task #5 done → @human-trainer / Total Tasks Completed: 5 / Branch: local working tree
+
+## [2026-08-29] — Task #5 App routing + TabBar delete
+- TabId dashboard|graph; readRoute aliases stats/control/specs/missing/unknown; graph needs project
+- Header: brand only on Dashboard; Graph chip + backToDashboard; no Specs/Graph/Projects/Control tabs
+- TabBar.tsx deleted; SpecBoardTab unrouted; replaceState ?tab=dashboard without project
+- Validation: `cd graph-ui && npx vitest run` → 16 files, 70 tests pass
+- Next: @human-trainer docs for Task #5 (last spec-001 task)
 
 ## [2026-08-29] — Task #4 Dashboard page
 - Dashboard: list + Control on one ScrollArea max-w-4xl; rows name/path/time/HealthDot/Enter/Delete

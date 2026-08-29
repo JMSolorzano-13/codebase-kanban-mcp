@@ -1,3 +1,10 @@
+/**
+ * @sdd-task: Task #5 - App routing + TabBar delete
+ * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
+ * @sdd-decision: SDD-ADR-008 - TabId dashboard|graph; stats/control/specs alias home
+ * @sdd-why: backToDashboard catalog lock for Graph header back control
+ * @human-debug: If back has no accessible name → messages.*.graph.backToDashboard drifted
+ */
 import { describe, expect, it } from "vitest";
 import { detectLanguage, messages } from "./i18n";
 
@@ -43,5 +50,7 @@ describe("i18n", () => {
     expect(messages.en.control.panel).toBe("Control Panel");
     expect(messages.en.projects.noIndexedProjects).toBe("No indexed projects");
     expect(messages.en.projects.indexFirstRepository).toBe("Index your first repository");
+    expect(messages.en.graph.backToDashboard).toBe("Back to Dashboard");
+    expect(messages.zh.graph.backToDashboard).toBe("返回仪表盘");
   });
 });

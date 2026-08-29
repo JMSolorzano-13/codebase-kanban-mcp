@@ -92,17 +92,17 @@ Implementation Notes: Render `Dashboard` directly in tests (pass `onSelectProjec
 
 ### Task #5 — App routing, header IA, TabBar delete
 Definition of Done:
-- [ ] `TabId` = `"dashboard" | "graph"`; `readRoute` aliases `stats`/`control`/`specs`/missing/unknown → Dashboard; `graph` without project → Dashboard
-- [ ] No header tabs labeled Specs, Graph, Projects, or Control
-- [ ] Default / no query shows Dashboard (Indexed Projects or empty CTA + Control Panel)
-- [ ] Enter on a row → `?tab=graph&project=<name>` mounts existing `GraphTab`
-- [ ] Graph header back control (`aria-label` `t.graph.backToDashboard`) → Dashboard; URL does not require `project=`
-- [ ] `?tab=graph&project=alpha` still shows GraphTab for alpha
-- [ ] `TabBar.tsx` deleted; no leftover import
-- [ ] `SpecBoardTab` not routed
-- [ ] `App.test.tsx` covers Gherkin rows below; mock `GraphTab` to avoid Three
-- [ ] i18n en+zh: `backToDashboard`
-- [ ] tests pass; breadcrumbs
+- [x] `TabId` = `"dashboard" | "graph"`; `readRoute` aliases `stats`/`control`/`specs`/missing/unknown → Dashboard; `graph` without project → Dashboard
+- [x] No header tabs labeled Specs, Graph, Projects, or Control
+- [x] Default / no query shows Dashboard (Indexed Projects or empty CTA + Control Panel)
+- [x] Enter on a row → `?tab=graph&project=<name>` mounts existing `GraphTab`
+- [x] Graph header back control (`aria-label` `t.graph.backToDashboard`) → Dashboard; URL does not require `project=`
+- [x] `?tab=graph&project=alpha` still shows GraphTab for alpha
+- [x] `TabBar.tsx` deleted; no leftover import
+- [x] `SpecBoardTab` not routed
+- [x] `App.test.tsx` covers Gherkin rows below; mock `GraphTab` to avoid Three
+- [x] i18n en+zh: `backToDashboard`
+- [x] tests pass; breadcrumbs
 User Stories Addressed: US-001
 Gherkin covered:
 - Default URL opens Dashboard
@@ -122,7 +122,7 @@ Implementation Notes: `replaceState` on first load writes `?tab=dashboard` witho
 | 2 | Chrome tokens + palette lock | 2h | None | no | full | done |
 | 3 | formatIndexedAt | 1h | None | no | compact | done |
 | 4 | Dashboard page | 5h | #1 #2 #3 | yes | full | done |
-| 5 | App routing + TabBar delete | 3h | #4 | no | full | pending |
+| 5 | App routing + TabBar delete | 3h | #4 | no | full | done |
 Total: 13h
 
 ## Critical Path

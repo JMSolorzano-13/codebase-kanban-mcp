@@ -1,3 +1,10 @@
+/**
+ * @sdd-task: Task #5 - App routing + TabBar delete
+ * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
+ * @sdd-decision: SDD-ADR-008 - TabId dashboard|graph; stats/control/specs alias home
+ * @sdd-why: Account IA is Dashboard home + Graph enter; leftover tab ids invited the old strip
+ * @human-debug: If a tab id is not dashboard|graph → types drifted; aliases live in App readRoute
+ */
 /* Graph data types matching the C layout3d.c JSON output */
 
 export interface GraphNode {
@@ -80,7 +87,7 @@ export interface SchemaInfo {
   total_edges: number;
 }
 
-export type TabId = "specs" | "graph" | "stats" | "control";
+export type TabId = "dashboard" | "graph";
 
 /* Spec board (sdd-skill Kanban) — matches spec_board.c's JSON output.
  * Zero-write / best-effort: everything here is derived from files sdd-skill's

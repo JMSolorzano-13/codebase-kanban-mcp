@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #4 - Dashboard page: list + Control + create-index
+ * @sdd-task: Task #5 - App routing + TabBar delete
  * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
- * @sdd-decision: SDD-ADR-003 - indexed_at shown as UTC locale via time[dateTime]
- * @sdd-why: enter + lastIndexed for Dashboard rows; useUiLanguage feeds formatIndexedAt
- * @human-debug: If time stays English on zh UI → useUiLanguage not wired or /api/ui-config lang missed
+ * @sdd-decision: SDD-ADR-008 - TabId dashboard|graph; stats/control/specs alias home
+ * @sdd-why: Graph header back control needs backToDashboard in en+zh; enter/lastIndexed stay
+ * @human-debug: If back has no accessible name → messages.*.graph.backToDashboard missing
  */
 import { useEffect, useState } from "react";
 
@@ -29,6 +29,7 @@ export const messages = {
     },
     graph: {
       selectedLabel: "Graph",
+      backToDashboard: "Back to Dashboard",
       search: "Search...",
       clearSelection: "Clear selection",
       folders: "Folders",
@@ -117,6 +118,7 @@ export const messages = {
     },
     graph: {
       selectedLabel: "图谱",
+      backToDashboard: "返回仪表盘",
       search: "搜索...",
       clearSelection: "清除选择",
       folders: "目录",

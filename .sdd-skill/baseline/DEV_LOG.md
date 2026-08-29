@@ -1,6 +1,12 @@
 # Dev Log
-Updated: 2026-08-29T18:55:00Z
-Active Spec: spec-001-w3q-executive-dashboard / Current Task: Task #2 done → @human-trainer / Total Tasks Completed: 2 / Branch: local working tree
+Updated: 2026-08-29T19:03:00Z
+Active Spec: spec-001-w3q-executive-dashboard / Current Task: Task #3 done → @human-trainer / Total Tasks Completed: 3 / Branch: local working tree
+
+## [2026-08-29] — Task #3 formatIndexedAt
+- formatIndexedAt(iso, en|zh): Intl en-US/zh-CN, UTC, year/month/day/hour/minute, timeZoneName short
+- Invalid ISO returns the raw string; no JSX, Dashboard wiring is Task #4
+- Validation: `cd graph-ui && npx vitest run src/lib/formatIndexedAt.test.ts` → 3 passed
+- Next: @human-trainer docs for Task #3; #4 can start (#1 #2 #3 done)
 
 ## [2026-08-29] — Task #2 grayscale chrome + palette lock
 - globals.css primary/accent/ring gray; --color-hover; surfaces distinct

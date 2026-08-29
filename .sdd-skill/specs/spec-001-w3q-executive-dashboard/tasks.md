@@ -47,10 +47,10 @@ Implementation Notes: HealthDot semantic hex stays. Do not import CSS vars into 
 
 ### Task #3 — formatIndexedAt
 Definition of Done:
-- [ ] `graph-ui/src/lib/formatIndexedAt.ts` implements plan D2 (UTC locale, fallback raw ISO)
-- [ ] `formatIndexedAt.test.ts`: `"2026-08-29T10:00:00Z"` + `en` → visible derived string containing `2026` and `29`, not identical to the raw ISO
-- [ ] invalid input returns the raw string
-- [ ] tests pass; breadcrumbs
+- [x] `graph-ui/src/lib/formatIndexedAt.ts` implements plan D2 (UTC locale, fallback raw ISO)
+- [x] `formatIndexedAt.test.ts`: `"2026-08-29T10:00:00Z"` + `en` → visible derived string containing `2026` and `29`, not identical to the raw ISO
+- [x] invalid input returns the raw string
+- [x] tests pass; breadcrumbs
 User Stories Addressed: US-002 (freshness display helper)
 Gherkin covered: Two projects — datetime derived from `indexed_at` (helper)
 Dependencies: None
@@ -120,7 +120,7 @@ Implementation Notes: `replaceState` on first load writes `?tab=dashboard` witho
 | Task # | Name | Effort | Dependencies | Subagent | Path | Status |
 | 1 | useProjects list-only | 2h | None | no | full | done |
 | 2 | Chrome tokens + palette lock | 2h | None | no | full | done |
-| 3 | formatIndexedAt | 1h | None | no | compact | pending |
+| 3 | formatIndexedAt | 1h | None | no | compact | done |
 | 4 | Dashboard page | 5h | #1 #2 #3 | yes | full | pending |
 | 5 | App routing + TabBar delete | 3h | #4 | no | full | pending |
 Total: 13h

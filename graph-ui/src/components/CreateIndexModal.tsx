@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #4 - Create modal path_exists redirect + notice
+ * @sdd-task: Task #5 - Dashboard Reindex + i18n + remaining Gherkin
  * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
- * @sdd-decision: SDD-ADR-015 - Create POST is {root_path} only; 409 path_exists is not a reindex
- * @sdd-why: Owned Path must close the modal and hand existing_project to App — never 202-then-redirect
- * @human-debug: If path_exists starts IndexProgress → line 133 (onCreated); if name_exists leaves modal → line 127 (code treated as path_exists)
+ * @sdd-decision: SDD-ADR-015 - Create POST is {root_path} only; name_exists uses i18n fallback
+ * @sdd-why: Modal must not gain Reindex; name_exists copy stays in the modal
+ * @human-debug: If path_exists starts IndexProgress → onCreated; if name_exists leaves modal → code treated as path_exists
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -129,7 +129,12 @@ export function CreateIndexModal({
         onClose();
         return;
       }
-      if (!res.ok) throw new Error(data.error ?? "Failed");
+      if (!res.ok) {
+        const fallback = data.code === "name_exists"
+          ? t.index.nameExists(data.existing_project ?? "")
+          : "Failed";
+        throw new Error(data.error ?? fallback);
+      }
       onCreated();
       onClose();
     } catch (e) {

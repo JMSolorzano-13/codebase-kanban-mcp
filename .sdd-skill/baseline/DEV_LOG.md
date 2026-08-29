@@ -1,6 +1,20 @@
 # Dev Log
-Updated: 2026-08-29T21:26:00Z
-Active Spec: spec-003-h7q-path-project-identity / Current Task: #4 create 409 redirect / Total Tasks Completed: 13 / Branch: local working tree
+Updated: 2026-08-29T21:38:45Z
+Active Spec: spec-003-h7q-path-project-identity / Current Task: #5 Reindex + i18n / Total Tasks Completed: 14 / Branch: local working tree
+
+## [2026-08-29] — Task #5 Dashboard Reindex + i18n
+- Per-row Reindex POSTs `{root_path, project}` (never `project_name`); 202 → IndexProgress, stay Dashboard
+- HTTP 500 → role=alert + i18n fallback; row remains; no Graph navigation
+- i18n en+zh: Reindex, reindexError, nameExists; conflict + pathExistsNotice unchanged
+- No Reindex on WorkspaceHeader or CreateIndexModal
+- Validation: `npx vitest run` → 132/132; `colorForLabel("Function")` still `#06b6d4`
+- Next: @human-trainer docs for Task #5
+
+## [2026-08-29] — Task #4 Create 409 redirect (human-trainer Trigger A)
+- Summary: `human/task-summaries/task-4-create-409-redirect.md`
+- QUICK-DEBUG + ARCHITECTURE-VISUAL: path_exists → Graph + role=status; name_exists stays
+- Listed `canonical_root` skips POST; create body still `{root_path}` only
+- Patterns: ✓ — Next: @review Task #4
 
 ## [2026-08-29] — Task #4 Create modal path_exists redirect + notice
 - POST still `{root_path}` only; 409 `path_exists` → `onPathExists` (no `onCreated` / IndexProgress)

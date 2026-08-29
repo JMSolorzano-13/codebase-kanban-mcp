@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #4 - Create modal path_exists redirect + notice
+ * @sdd-task: Task #5 - Dashboard Reindex + i18n + remaining Gherkin
  * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
- * @sdd-decision: SDD-ADR-015 - path_exists notice copy in en+zh
- * @sdd-why: Lock index.pathExistsNotice so App status text cannot drift
- * @human-debug: If notice lacks "alpha" → pathExistsNotice interpolates name
+ * @sdd-decision: SDD-ADR-015 - Reindex / name_exists / path_exists copy in en+zh
+ * @sdd-why: Lock US-007 Reindex accessible name and remaining identity strings
+ * @human-debug: If getByRole Reindex fails → messages.en.projects.reindex drifted from "Reindex"
  */
 import { describe, expect, it } from "vitest";
 import { detectLanguage, messages } from "./i18n";
@@ -66,5 +66,11 @@ describe("i18n", () => {
     expect(messages.zh.projects.deleteNamed("a1")).toBe("删除 a1");
     expect(messages.en.index.pathExistsNotice("alpha")).toBe("Already indexed as alpha");
     expect(messages.zh.index.pathExistsNotice("alpha")).toBe("已索引为 alpha");
+    expect(messages.en.projects.reindex).toBe("Reindex");
+    expect(messages.zh.projects.reindex).toBe("重新索引");
+    expect(messages.en.projects.reindexError).toBe("Reindex failed");
+    expect(messages.zh.projects.reindexError).toBe("重新索引失败");
+    expect(messages.en.index.nameExists("foo")).toBe("Name already used by foo");
+    expect(messages.zh.index.nameExists("foo")).toBe("名称已被 foo 占用");
   });
 });

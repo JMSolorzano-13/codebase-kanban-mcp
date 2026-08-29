@@ -96,14 +96,14 @@ Implementation Notes: Notice can clear on next navigation. Do not 202-then-redir
 
 ### Task #5 — Dashboard Reindex + i18n + remaining Gherkin
 Definition of Done:
-- [ ] Every row (including conflict members) has control accessible name "Reindex"
-- [ ] Click → POST `{"root_path":row.root_path,"project":row.name}` ; 202 → IndexProgress, stay Dashboard
-- [ ] 500 → visible error, stay Dashboard, row remains
-- [ ] No Reindex on workspace header
-- [ ] i18n en+zh: Reindex, conflict, path-exists notice, name_exists, reindex error
-- [ ] App/Dashboard tests: Reindex happy, custom-named `custom`, Reindex 500
-- [ ] Full suite green; `colorForLabel("Function")` still `#06b6d4` if that test exists
-- [ ] tests pass; breadcrumbs
+- [x] Every row (including conflict members) has control accessible name "Reindex"
+- [x] Click → POST `{"root_path":row.root_path,"project":row.name}` ; 202 → IndexProgress, stay Dashboard
+- [x] 500 → visible error, stay Dashboard, row remains
+- [x] No Reindex on workspace header
+- [x] i18n en+zh: Reindex, conflict, path-exists notice, name_exists, reindex error
+- [x] App/Dashboard tests: Reindex happy, custom-named `custom`, Reindex 500
+- [x] Full suite green; `colorForLabel("Function")` still `#06b6d4` if that test exists
+- [x] tests pass; breadcrumbs
 User Stories Addressed: US-002, US-007
 Gherkin covered:
 - Dashboard Reindex starts job
@@ -121,7 +121,7 @@ Implementation Notes: Create modal must not gain Reindex. Do not send `project_n
 | 2 | Admit HTTP/MCP/jobs | 4h | #1 | done |
 | 3 | Conflict UI | 3h | #1 | done |
 | 4 | Create 409 redirect | 2h | #2 #3 | done |
-| 5 | Reindex + compose | 3h | #2 #3 #4 | pending |
+| 5 | Reindex + compose | 3h | #2 #3 #4 | done |
 Total: 16h
 
 ## Critical Path

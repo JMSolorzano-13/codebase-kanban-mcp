@@ -19,8 +19,8 @@ Start Date: 2026-08-29 / Target Close Date: TBD
 - [x] committed w/ clear msg
 
 ### Task #5 — Reindex + compose
-- [ ] code per spec | follows constitution.md | tests cover all AC | coverage>80% | tests pass locally | no console errors | breadcrumbs (@sdd-task/@sdd-spec/@sdd-decision) present
-- [ ] committed w/ clear msg (held — commit only on request)
+- [x] code per spec | follows constitution.md | tests cover all AC | coverage>80% | tests pass locally | no console errors | breadcrumbs (@sdd-task/@sdd-spec/@sdd-decision) present
+- [x] committed w/ clear msg
 
 ## Code Quality — @review fills
 Constitution: [x] nomenclature [x] API standards [x] security [x] performance(API<200ms,DB<50ms) [x] testing [x] documentation [x] error handling [ ] monitoring
@@ -46,7 +46,15 @@ Task #3 DEV 2026-08-29 (Vitest; Playwright not run — LEVEL 1):
 | pathGroups.test.ts | 3/3 | PASS DEV | canonical_root group; root_path fallback; newest then greater name |
 | i18n.test.ts | 6/6 | PASS DEV | conflict + deleteNamed en+zh |
 | graph-ui Task #3 files | 25/25 | PASS DEV | includes spec-001 Dashboard list/modal regression |
-Task #3 Gherkin owned here: US-004/005. Reindex + create-409 UI wait for #4–#5.
+Task #3 Gherkin owned here: US-004/005. Reindex Gherkin waits for #5.
+
+Task #4 DEV 2026-08-29 (Vitest; Playwright not run — LEVEL 1):
+| Test Suite | Coverage | Status | Notes |
+| CreateIndexModal.test.tsx | 5/5 | PASS DEV | no Project ID; POST {root_path} only; path_exists → onPathExists no onCreated; name_exists stays; listed Path skips POST |
+| App.test.tsx Task #4 | 4/4 Gherkin+notice | PASS DEV | 409 path_exists → Graph + role=status; name_exists stays no project=foo; skip POST still redirects; notice clears on leave |
+| i18n.test.ts | 6/6 | PASS DEV | pathExistsNotice en+zh interpolates name |
+| graph-ui Task #4 files | 31/31 | PASS DEV | includes spec-001/002 App routing regression |
+Task #4 Gherkin owned here: US-001/006. Reindex Gherkin waits for #5.
 
 ## Human Validation — @human-trainer fills
 [x] task summaries done [ ] spec summary done [x] architecture diagram updated [x] QUICK-DEBUG updated [ ] PROJECT-OVERVIEW updated [x] @sdd-* headers present [ ] human confirmed "✅ Read and understood"

@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #3 - Dashboard conflict group + Enter newest + delete older
+ * @sdd-task: Task #5 - Dashboard Reindex + i18n + remaining Gherkin
  * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
- * @sdd-decision: SDD-ADR-016 - Dashboard groups by list canonical_root
- * @sdd-why: US-004/005 Gherkin — conflict region, Enter newest, per-older confirm-delete
- * @human-debug: If Enter calls onSelectProject with the older name → pickNewest; if Path repeats → group header missing
+ * @sdd-decision: SDD-ADR-015 - Reindex POSTs {root_path, project}; 202 stays home
+ * @sdd-why: US-002/007 Gherkin — Reindex happy, custom name, 500 stays on Dashboard
+ * @human-debug: If Reindex navigates → onSelectProject; if POST has project_name → body builder wrong
  */
 /* @vitest-environment jsdom */
 import "@testing-library/jest-dom/vitest";
@@ -113,6 +113,7 @@ describe("Dashboard list + Control", () => {
     expect(betaTime?.textContent).not.toBe("2026-08-29T11:30:00Z");
 
     expect(screen.getAllByRole("button", { name: messages.en.projects.enter })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Reindex" })).toHaveLength(2);
     expect(screen.getByRole("button", { name: `+ ${messages.en.index.newIndex}` })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: messages.en.common.refresh }).length).toBeGreaterThanOrEqual(1);
 
@@ -416,6 +417,7 @@ describe("Dashboard path conflict groups", () => {
     const region = await screen.findByRole("region", { name: messages.en.projects.conflict });
     expect(within(region).getByText("alpha-old")).toBeInTheDocument();
     expect(within(region).getByText("alpha")).toBeInTheDocument();
+    expect(within(region).getAllByRole("button", { name: "Reindex" })).toHaveLength(2);
     expect(within(region).getAllByText("/tmp/alpha")).toHaveLength(1);
 
     const oldTime = region.querySelector('time[datetime="2026-08-28T10:00:00Z"]');
@@ -475,6 +477,7 @@ describe("Dashboard path conflict groups", () => {
     expect(within(region).getByText("a3")).toBeInTheDocument();
     expect(within(region).getByRole("button", { name: messages.en.projects.deleteNamed("a1") })).toBeInTheDocument();
     expect(within(region).getByRole("button", { name: messages.en.projects.deleteNamed("a2") })).toBeInTheDocument();
+    expect(within(region).getAllByRole("button", { name: "Reindex" })).toHaveLength(3);
     expect(screen.queryByRole("button", { name: /delete (both|all|a1 and a2|a2 and a1)/i })).not.toBeInTheDocument();
 
     fireEvent.click(within(region).getByRole("button", { name: messages.en.projects.enter }));
@@ -495,5 +498,134 @@ describe("Dashboard path conflict groups", () => {
     expect(deleteCalls(fetchMock, "alpha-old")).toHaveLength(0);
     expect(within(region).getByText("alpha-old")).toBeInTheDocument();
     expect(within(region).getByText("alpha")).toBeInTheDocument();
+  });
+});
+
+function projectRow(name: string): HTMLElement {
+  const label = screen.getByText(name);
+  const row = label.closest("li") ?? label.closest(".rounded-xl");
+  if (!(row instanceof HTMLElement)) throw new Error(`missing row ${name}`);
+  return row;
+}
+
+function indexPosts(fetchMock: ReturnType<typeof vi.fn>) {
+  return fetchMock.mock.calls.filter((call) => {
+    const url = String(call[0]);
+    const init = call[1] as RequestInit | undefined;
+    return url === "/api/index" && init?.method === "POST";
+  });
+}
+
+describe("Dashboard Reindex", () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("Reindex POSTs root_path and project and shows IndexProgress", async () => {
+    let submitted: unknown = null;
+    const fetchMock = mockDashboardFetch((url, init) => {
+      if (url === "/rpc") {
+        return okRpc({
+          projects: [{ name: "alpha", root_path: "/tmp/alpha", indexed_at: "2026-08-29T10:00:00Z" }],
+        });
+      }
+      if (url === "/api/index") {
+        submitted = JSON.parse(String(init?.body));
+        return json({ status: "indexing", slot: 0 }, 202);
+      }
+      return undefined;
+    });
+    const onSelectProject = vi.fn();
+    render(<Dashboard onSelectProject={onSelectProject} />);
+
+    expect(await screen.findByText("alpha")).toBeInTheDocument();
+    fireEvent.click(within(projectRow("alpha")).getByRole("button", { name: "Reindex" }));
+
+    await waitFor(() => {
+      expect(submitted).toEqual({ root_path: "/tmp/alpha", project: "alpha" });
+    });
+    expect(submitted).not.toHaveProperty("project_name");
+    expect(indexPosts(fetchMock)).toHaveLength(1);
+    expect(await screen.findByText(messages.en.projects.indexingInProgress)).toBeInTheDocument();
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+    expect(onSelectProject).not.toHaveBeenCalled();
+  });
+
+  it("Reindex of a custom-named project keeps that name", async () => {
+    let submitted: unknown = null;
+    mockDashboardFetch((url, init) => {
+      if (url === "/rpc") {
+        return okRpc({
+          projects: [{ name: "custom", root_path: "/tmp/newrepo", indexed_at: "2026-08-29T10:00:00Z" }],
+        });
+      }
+      if (url === "/api/index") {
+        submitted = JSON.parse(String(init?.body));
+        return json({ status: "indexing", slot: 0 }, 202);
+      }
+      return undefined;
+    });
+    render(<Dashboard onSelectProject={() => {}} />);
+
+    expect(await screen.findByText("custom")).toBeInTheDocument();
+    fireEvent.click(within(projectRow("custom")).getByRole("button", { name: "Reindex" }));
+
+    await waitFor(() => {
+      expect(submitted).toEqual({ root_path: "/tmp/newrepo", project: "custom" });
+    });
+    expect(submitted).not.toHaveProperty("project_name");
+    expect(await screen.findByText(messages.en.projects.indexingInProgress)).toBeInTheDocument();
+    expect(screen.getByText("custom")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "newrepo" })).not.toBeInTheDocument();
+  });
+
+  it("Reindex 500 shows a visible error and keeps the row", async () => {
+    mockDashboardFetch((url) => {
+      if (url === "/rpc") {
+        return okRpc({
+          projects: [{ name: "alpha", root_path: "/tmp/alpha", indexed_at: "2026-08-29T10:00:00Z" }],
+        });
+      }
+      if (url === "/api/index") {
+        return json({ error: "index exploded" }, 500);
+      }
+      return undefined;
+    });
+    const onSelectProject = vi.fn();
+    render(<Dashboard onSelectProject={onSelectProject} />);
+
+    expect(await screen.findByText("alpha")).toBeInTheDocument();
+    fireEvent.click(within(projectRow("alpha")).getByRole("button", { name: "Reindex" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent?.trim().length).toBeGreaterThan(0);
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+    expect(onSelectProject).not.toHaveBeenCalled();
+    expect(screen.queryByText(messages.en.projects.indexingInProgress)).not.toBeInTheDocument();
+  });
+
+  it("conflict member Reindex POSTs that row name", async () => {
+    let submitted: unknown = null;
+    mockDashboardFetch((url, init) => {
+      if (url === "/rpc") return okRpc(twoClones());
+      if (url === "/api/index") {
+        submitted = JSON.parse(String(init?.body));
+        return json({ status: "indexing", slot: 0 }, 202);
+      }
+      return undefined;
+    });
+    render(<Dashboard onSelectProject={() => {}} />);
+
+    const region = await screen.findByRole("region", { name: messages.en.projects.conflict });
+    expect(within(region).getAllByRole("button", { name: "Reindex" })).toHaveLength(2);
+    fireEvent.click(within(projectRow("alpha-old")).getByRole("button", { name: "Reindex" }));
+
+    await waitFor(() => {
+      expect(submitted).toEqual({ root_path: "/tmp/alpha", project: "alpha-old" });
+    });
+    expect(submitted).not.toHaveProperty("project_name");
   });
 });

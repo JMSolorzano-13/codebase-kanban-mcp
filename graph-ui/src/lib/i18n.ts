@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #4 - Create modal path_exists redirect + notice
+ * @sdd-task: Task #5 - Dashboard Reindex + i18n + remaining Gherkin
  * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
- * @sdd-decision: SDD-ADR-015 - bare POST is create; path_exists notice is not a reindex
- * @sdd-why: US-001 status notice must name the existing project in en+zh
- * @human-debug: If Graph has no English notice → messages.en.index.pathExistsNotice missing
+ * @sdd-decision: SDD-ADR-015 - HTTP project is reindex; UI copy must not invent project_name
+ * @sdd-why: US-007 accessible name Reindex + 500 error; US-001/006 notice and name_exists stay en+zh
+ * @human-debug: If getByRole Reindex fails → messages.en.projects.reindex is not exactly "Reindex"
  */
 import { useEffect, useState } from "react";
 
@@ -48,6 +48,8 @@ export const messages = {
       deleteNamed: (name: string) => `Delete ${name}`,
       deleteConfirm: (name: string) => `Delete index for "${name}"?`,
       conflict: "Path conflict",
+      reindex: "Reindex",
+      reindexError: "Reindex failed",
       healthHealthy: "Database healthy",
       healthMissing: "Database missing",
       healthCorrupt: "Database unhealthy",
@@ -70,6 +72,7 @@ export const messages = {
       browseRoot: (path: string) => `Browse ${path}`,
       indexDirectory: (name: string) => `Index ${name}`,
       pathExistsNotice: (name: string) => `Already indexed as ${name}`,
+      nameExists: (name: string) => `Name already used by ${name}`,
     },
     adr: {
       title: "Architecture Decision Record",
@@ -144,6 +147,8 @@ export const messages = {
       deleteNamed: (name: string) => `删除 ${name}`,
       deleteConfirm: (name: string) => `删除 "${name}" 的索引？`,
       conflict: "路径冲突",
+      reindex: "重新索引",
+      reindexError: "重新索引失败",
       healthHealthy: "数据库正常",
       healthMissing: "数据库缺失",
       healthCorrupt: "数据库异常",
@@ -166,6 +171,7 @@ export const messages = {
       browseRoot: (path: string) => `浏览 ${path}`,
       indexDirectory: (name: string) => `索引 ${name}`,
       pathExistsNotice: (name: string) => `已索引为 ${name}`,
+      nameExists: (name: string) => `名称已被 ${name} 占用`,
     },
     adr: {
       title: "架构决策记录",

@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #4 - Create modal path_exists redirect + notice
+ * @sdd-task: Task #5 - Dashboard Reindex + i18n + remaining Gherkin
  * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
- * @sdd-decision: SDD-ADR-015 - create modal never reindexes; path_exists leaves Dashboard
- * @sdd-why: Wire onPathExists + listed Path skip so 409 does not call onCreated
- * @human-debug: If path_exists shows IndexProgress → onCreated still used; if skip POSTs → existingProjects not passed
+ * @sdd-decision: SDD-ADR-015 - Dashboard Reindex POSTs {root_path, project}; never project_name
+ * @sdd-why: US-002/007 — refresh the existing row without the create modal or workspace navigation
+ * @human-debug: If Reindex opens Graph → onSelectProject called; if 202 silent → setIndexing not set; if 500 drops row → refresh on error
  */
 import { useCallback, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -22,12 +22,17 @@ interface DashboardProps {
   onPathExists?: (project: string) => void;
 }
 
+interface IndexErrorPayload {
+  error?: string;
+}
+
 export function Dashboard({ onSelectProject, onPathExists }: DashboardProps) {
   const t = useUiMessages();
   const lang = useUiLanguage();
   const { projects, loading, error, refresh } = useProjects();
   const [showModal, setShowModal] = useState(false);
   const [indexing, setIndexing] = useState(false);
+  const [reindexError, setReindexError] = useState<string | null>(null);
 
   const deleteProject = useCallback(async (name: string) => {
     if (!confirm(t.projects.deleteConfirm(name))) return;
@@ -39,7 +44,36 @@ export function Dashboard({ onSelectProject, onPathExists }: DashboardProps) {
     }
   }, [refresh, t.projects]);
 
+  const reindexProject = useCallback(async (p: Project) => {
+    setReindexError(null);
+    try {
+      const res = await fetch("/api/index", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ root_path: p.root_path, project: p.name }),
+      });
+      if (res.status === 202) {
+        setIndexing(true);
+        refresh();
+        return;
+      }
+      let message = t.projects.reindexError;
+      try {
+        const data = (await res.json()) as IndexErrorPayload;
+        if (typeof data.error === "string" && data.error.length > 0) {
+          message = data.error;
+        }
+      } catch {
+        /* keep i18n fallback — 500 may have empty/non-JSON body */
+      }
+      setReindexError(message);
+    } catch {
+      setReindexError(t.projects.reindexError);
+    }
+  }, [refresh, t.projects.reindexError]);
+
   const groups = groupProjects(projects);
+  const listError = error || reindexError;
 
   return (
     <ScrollArea className="h-full">
@@ -67,9 +101,9 @@ export function Dashboard({ onSelectProject, onPathExists }: DashboardProps) {
           </div>
         </div>
 
-        {error && (
+        {listError && (
           <div role="alert" className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 mb-6">
-            <p className="text-destructive text-[13px]">{error}</p>
+            <p className="text-destructive text-[13px]">{listError}</p>
           </div>
         )}
 
@@ -122,14 +156,24 @@ export function Dashboard({ onSelectProject, onPathExists }: DashboardProps) {
                           </time>
                         </p>
                       </div>
-                      <button
-                        onClick={() => { void deleteProject(p.name); }}
-                        className="px-2 py-1.5 rounded-lg hover:bg-destructive/10 text-foreground/20 hover:text-destructive text-[12px] transition-all shrink-0"
-                        title={t.projects.deleteNamed(p.name)}
-                        aria-label={t.projects.deleteNamed(p.name)}
-                      >
-                        ✕
-                      </button>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          aria-label={t.projects.reindex}
+                          onClick={() => { void reindexProject(p); }}
+                          className="px-3 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.07] text-[12px] text-foreground/50 font-medium transition-all"
+                        >
+                          {t.projects.reindex}
+                        </button>
+                        <button
+                          onClick={() => { void deleteProject(p.name); }}
+                          className="px-2 py-1.5 rounded-lg hover:bg-destructive/10 text-foreground/20 hover:text-destructive text-[12px] transition-all shrink-0"
+                          title={t.projects.deleteNamed(p.name)}
+                          aria-label={t.projects.deleteNamed(p.name)}
+                        >
+                          ✕
+                        </button>
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -141,8 +185,10 @@ export function Dashboard({ onSelectProject, onPathExists }: DashboardProps) {
                 lang={lang}
                 lastIndexedLabel={t.projects.lastIndexed}
                 enterLabel={t.projects.enter}
+                reindexLabel={t.projects.reindex}
                 deleteTitle={t.projects.deleteTitle}
                 onEnter={onSelectProject}
+                onReindex={reindexProject}
                 onDelete={deleteProject}
               />
             ),
@@ -173,16 +219,20 @@ function SoloProjectCard({
   lang,
   lastIndexedLabel,
   enterLabel,
+  reindexLabel,
   deleteTitle,
   onEnter,
+  onReindex,
   onDelete,
 }: {
   project: Project;
   lang: "en" | "zh";
   lastIndexedLabel: string;
   enterLabel: string;
+  reindexLabel: string;
   deleteTitle: string;
   onEnter: (name: string) => void;
+  onReindex: (p: Project) => void;
   onDelete: (name: string) => void;
 }) {
   return (
@@ -207,6 +257,14 @@ function SoloProjectCard({
             className="px-3 py-1.5 rounded-lg bg-primary/15 hover:bg-primary/25 text-primary text-[12px] font-medium transition-all"
           >
             {enterLabel}
+          </button>
+          <button
+            type="button"
+            aria-label={reindexLabel}
+            onClick={() => { void onReindex(p); }}
+            className="px-3 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.07] text-[12px] text-foreground/50 font-medium transition-all"
+          >
+            {reindexLabel}
           </button>
           <button
             onClick={() => { void onDelete(p.name); }}

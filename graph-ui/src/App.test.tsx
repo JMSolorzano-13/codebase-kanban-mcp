@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #4 - Create modal path_exists redirect + notice
+ * @sdd-task: Task #5 - Dashboard Reindex + i18n + remaining Gherkin
  * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
- * @sdd-decision: SDD-ADR-015 - 409 path_exists → Graph + notice; name_exists stays in modal
- * @sdd-why: US-001/006 Gherkin — redirect, status notice, no Project ID, no 202-then-redirect
- * @human-debug: If path_exists stays on Dashboard → onPathExists not wired; if name_exists opens Graph → code treated as path_exists
+ * @sdd-decision: SDD-ADR-015 - Reindex 202 stays on Dashboard; create 409 still opens Graph
+ * @sdd-why: US-002/007 Gherkin — Reindex happy, custom, 500; no workspace Reindex
+ * @human-debug: If Reindex sets tab=graph → onSelectProject fired; if 500 leaves home → navigate on error
  */
 /* @vitest-environment jsdom */
 import "@testing-library/jest-dom/vitest";
@@ -460,5 +460,85 @@ describe("App routing + workspace", () => {
     await expectDashboard();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(window.location.search).toBe("?tab=dashboard");
+  });
+
+  it("Dashboard Reindex starts a job and stays on Dashboard", async () => {
+    let submitted: unknown = null;
+    mockAppFetch([ALPHA], {
+      onIndex: (body) => {
+        submitted = body;
+        return json({ status: "indexing", slot: 0 }, 202);
+      },
+    });
+    window.history.replaceState(null, "", "/?tab=dashboard");
+    render(<App />);
+
+    expect(await screen.findByText("alpha")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reindex" }));
+
+    await waitFor(() => {
+      expect(submitted).toEqual({ root_path: "/tmp/alpha", project: "alpha" });
+    });
+    expect(submitted).not.toHaveProperty("project_name");
+    expect(await screen.findByText(messages.en.projects.indexingInProgress)).toBeInTheDocument();
+    expect(window.location.search).not.toContain("tab=graph");
+    expect(screen.queryByTestId("graph-tab")).not.toBeInTheDocument();
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+  });
+
+  it("Reindex of a custom-named project keeps that name", async () => {
+    let submitted: unknown = null;
+    mockAppFetch([
+      { name: "custom", root_path: "/tmp/newrepo", indexed_at: "2026-08-29T10:00:00Z", canonical_root: "/tmp/newrepo" },
+    ], {
+      onIndex: (body) => {
+        submitted = body;
+        return json({ status: "indexing", slot: 0 }, 202);
+      },
+    });
+    window.history.replaceState(null, "", "/?tab=dashboard");
+    render(<App />);
+
+    expect(await screen.findByText("custom")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reindex" }));
+
+    await waitFor(() => {
+      expect(submitted).toEqual({ root_path: "/tmp/newrepo", project: "custom" });
+    });
+    expect(submitted).not.toHaveProperty("project_name");
+    expect(await screen.findByText(messages.en.projects.indexingInProgress)).toBeInTheDocument();
+    expect(window.location.search).not.toContain("tab=graph");
+    expect(screen.getByText("custom")).toBeInTheDocument();
+    expect(screen.queryByTestId("graph-tab")).not.toBeInTheDocument();
+  });
+
+  it("Dashboard Reindex 500 stays on Dashboard and keeps the row", async () => {
+    mockAppFetch([ALPHA], {
+      onIndex: () => json({ error: "index exploded" }, 500),
+    });
+    window.history.replaceState(null, "", "/?tab=dashboard");
+    render(<App />);
+
+    expect(await screen.findByText("alpha")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reindex" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent?.trim().length).toBeGreaterThan(0);
+    expect(window.location.search).not.toContain("tab=graph");
+    expect(screen.queryByTestId("graph-tab")).not.toBeInTheDocument();
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+    expect(screen.getByText(messages.en.control.panel)).toBeInTheDocument();
+  });
+
+  it("workspace header has no Reindex control", async () => {
+    mockAppFetch([ALPHA]);
+    window.history.replaceState(null, "", "/");
+    render(<App />);
+
+    await enterAlpha();
+    const header = document.querySelector("header");
+    expect(header).toBeTruthy();
+    expect(within(header as HTMLElement).queryByRole("button", { name: "Reindex" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reindex" })).not.toBeInTheDocument();
   });
 });

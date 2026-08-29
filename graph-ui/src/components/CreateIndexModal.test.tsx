@@ -71,6 +71,7 @@ describe("CreateIndexModal 409 + path-only POST", () => {
     expect(await screen.findByDisplayValue("/tmp/alpha")).toBeInTheDocument();
     expect(screen.queryByLabelText(messages.en.index.projectName)).not.toBeInTheDocument();
     expect(screen.queryByText(messages.en.index.projectName)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reindex" })).not.toBeInTheDocument();
   });
 
   it("POSTs {root_path} only with no project or project_name", async () => {

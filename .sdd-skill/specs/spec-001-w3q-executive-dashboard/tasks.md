@@ -61,20 +61,20 @@ Implementation Notes: Do not put JSX here. Lang argument `en` | `zh`. #4 wires `
 
 ### Task #4 — Dashboard page: list + Control + create-index
 Definition of Done:
-- [ ] `Dashboard.tsx` stacks Indexed Projects then full Control on one `ScrollArea` (`max-w-4xl`)
-- [ ] Rows: name, `root_path`, `<time dateTime={indexed_at}>` via `formatIndexedAt`, HealthDot, Enter, Delete-with-confirm
-- [ ] No ADR control, no aggregate Nodes/Edges cards, no per-row counts, no label chips
-- [ ] Page-level New Index + Refresh; empty: "No indexed projects" + "Index your first repository" + Control still visible
-- [ ] list error: destructive region, non-empty text, Control still visible
-- [ ] IndexProgress on Dashboard while indexing; 202 does not navigate to Graph
-- [ ] `CreateIndexModal` extracted; no Project ID field/state; POST body `{ "root_path": path }` only
-- [ ] Folder browse, Windows breadcrumbs, filter, Index This Folder behavior preserved (existing tests migrated)
-- [ ] `ControlTab` `embedded` — polls 3s/2s remain; gauges Total CPU / Total RAM / Processes / Self RAM; Active Processes; Process Logs
-- [ ] `HealthDot` / `IndexProgress` extracted; `AdrButton` extracted and not imported by Dashboard
-- [ ] `StatsTab.tsx` removed after extract; tests moved to `Dashboard.test.tsx` / `IndexProgress` / `AdrButton.test.tsx`
-- [ ] i18n en+zh: `enter`, `lastIndexed`, keep existing Control/empty copy
-- [ ] `Dashboard.test.tsx` covers Gherkin rows below
-- [ ] tests pass; breadcrumbs
+- [x] `Dashboard.tsx` stacks Indexed Projects then full Control on one `ScrollArea` (`max-w-4xl`)
+- [x] Rows: name, `root_path`, `<time dateTime={indexed_at}>` via `formatIndexedAt`, HealthDot, Enter, Delete-with-confirm
+- [x] No ADR control, no aggregate Nodes/Edges cards, no per-row counts, no label chips
+- [x] Page-level New Index + Refresh; empty: "No indexed projects" + "Index your first repository" + Control still visible
+- [x] list error: destructive region, non-empty text, Control still visible
+- [x] IndexProgress on Dashboard while indexing; 202 does not navigate to Graph
+- [x] `CreateIndexModal` extracted; no Project ID field/state; POST body `{ "root_path": path }` only
+- [x] Folder browse, Windows breadcrumbs, filter, Index This Folder behavior preserved (existing tests migrated)
+- [x] `ControlTab` `embedded` — polls 3s/2s remain; gauges Total CPU / Total RAM / Processes / Self RAM; Active Processes; Process Logs
+- [x] `HealthDot` / `IndexProgress` extracted; `AdrButton` extracted and not imported by Dashboard
+- [x] `StatsTab.tsx` removed after extract; tests moved to `Dashboard.test.tsx` / `IndexProgress` / `AdrButton.test.tsx`
+- [x] i18n en+zh: `enter`, `lastIndexed`, keep existing Control/empty copy
+- [x] `Dashboard.test.tsx` covers Gherkin rows below
+- [x] tests pass; breadcrumbs
 User Stories Addressed: US-002, US-003, US-005, US-006
 Gherkin covered:
 - Two projects render identity and freshness only
@@ -121,7 +121,7 @@ Implementation Notes: `replaceState` on first load writes `?tab=dashboard` witho
 | 1 | useProjects list-only | 2h | None | no | full | done |
 | 2 | Chrome tokens + palette lock | 2h | None | no | full | done |
 | 3 | formatIndexedAt | 1h | None | no | compact | done |
-| 4 | Dashboard page | 5h | #1 #2 #3 | yes | full | pending |
+| 4 | Dashboard page | 5h | #1 #2 #3 | yes | full | done |
 | 5 | App routing + TabBar delete | 3h | #4 | no | full | pending |
 Total: 13h
 

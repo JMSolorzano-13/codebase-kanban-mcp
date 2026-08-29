@@ -1,6 +1,13 @@
 # Dev Log
-Updated: 2026-08-29T19:03:00Z
-Active Spec: spec-001-w3q-executive-dashboard / Current Task: Task #3 done → @human-trainer / Total Tasks Completed: 3 / Branch: local working tree
+Updated: 2026-08-29T19:15:00Z
+Active Spec: spec-001-w3q-executive-dashboard / Current Task: Task #4 done → @human-trainer / Total Tasks Completed: 4 / Branch: local working tree
+
+## [2026-08-29] — Task #4 Dashboard page
+- Dashboard: list + Control on one ScrollArea max-w-4xl; rows name/path/time/HealthDot/Enter/Delete
+- CreateIndexModal POST {root_path} only; no Project ID; 202 stays + IndexProgress
+- ControlTab embedded polls 3s/2s; StatsTab deleted; AdrButton not imported
+- Validation: `cd graph-ui && npx vitest run` → 15 files, 63 tests pass
+- Next: @human-trainer docs for Task #4; #5 routing pending
 
 ## [2026-08-29] — Task #3 formatIndexedAt
 - formatIndexedAt(iso, en|zh): Intl en-US/zh-CN, UTC, year/month/day/hour/minute, timeZoneName short

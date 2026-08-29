@@ -59,7 +59,7 @@ describe("globals.css chrome tokens", () => {
 describe("chrome surfaces drop hardcoded teal-black", () => {
   const files = [
     "App.tsx",
-    "components/StatsTab.tsx",
+    "components/Dashboard.tsx",
     "components/GraphTab.tsx",
     "components/NodeDetailPanel.tsx",
     "components/DisplaySettingsMenu.tsx",

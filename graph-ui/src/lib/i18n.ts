@@ -1,3 +1,10 @@
+/**
+ * @sdd-task: Task #4 - Dashboard page: list + Control + create-index
+ * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
+ * @sdd-decision: SDD-ADR-003 - indexed_at shown as UTC locale via time[dateTime]
+ * @sdd-why: enter + lastIndexed for Dashboard rows; useUiLanguage feeds formatIndexedAt
+ * @human-debug: If time stays English on zh UI → useUiLanguage not wired or /api/ui-config lang missed
+ */
 import { useEffect, useState } from "react";
 
 export type UiLanguage = "en" | "zh";
@@ -30,6 +37,8 @@ export const messages = {
       indexedProjects: "Indexed Projects",
       noIndexedProjects: "No indexed projects",
       indexFirstRepository: "Index your first repository",
+      enter: "Enter",
+      lastIndexed: "Last indexed",
       viewGraph: "View Graph",
       nodes: "nodes",
       edges: "edges",
@@ -116,6 +125,8 @@ export const messages = {
       indexedProjects: "已索引项目",
       noIndexedProjects: "暂无已索引项目",
       indexFirstRepository: "索引第一个仓库",
+      enter: "进入",
+      lastIndexed: "最近索引",
       viewGraph: "查看图谱",
       nodes: "节点",
       edges: "边",
@@ -226,7 +237,7 @@ function loadUiLanguage(): Promise<UiLanguage> {
   return languageRequest;
 }
 
-export function useUiMessages(): UiMessages {
+export function useUiLanguage(): UiLanguage {
   const [lang, setLang] = useState<UiLanguage>(cachedLanguage);
 
   useEffect(() => {
@@ -241,5 +252,10 @@ export function useUiMessages(): UiMessages {
     };
   }, []);
 
+  return lang;
+}
+
+export function useUiMessages(): UiMessages {
+  const lang = useUiLanguage();
   return messages[lang];
 }

@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { GraphTab } from "./components/GraphTab";
-import { StatsTab } from "./components/StatsTab";
+import { Dashboard } from "./components/Dashboard";
 import { ControlTab } from "./components/ControlTab";
 import { SpecBoardTab } from "./components/SpecBoardTab";
 import type { TabId } from "./lib/types";
@@ -141,7 +141,7 @@ export function App() {
         ) : activeTab === "control" ? (
           <ControlTab />
         ) : (
-          <StatsTab
+          <Dashboard
             onSelectProject={(p) => navigate("graph", p)}
           />
         )}

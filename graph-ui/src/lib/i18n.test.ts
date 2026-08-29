@@ -36,5 +36,12 @@ describe("i18n", () => {
     expect(messages.zh.tabs.projects).toBe("项目");
     expect(messages.zh.index.newIndex).toBe("新建索引");
     expect(messages.en.index.repositoryPath).toBe("Repository path");
+    expect(messages.en.projects.enter).toBe("Enter");
+    expect(messages.en.projects.lastIndexed).toBe("Last indexed");
+    expect(messages.zh.projects.enter).toBe("进入");
+    expect(messages.zh.projects.lastIndexed).toBe("最近索引");
+    expect(messages.en.control.panel).toBe("Control Panel");
+    expect(messages.en.projects.noIndexedProjects).toBe("No indexed projects");
+    expect(messages.en.projects.indexFirstRepository).toBe("Index your first repository");
   });
 });

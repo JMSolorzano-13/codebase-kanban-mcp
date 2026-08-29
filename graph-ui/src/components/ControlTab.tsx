@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #2 - Grayscale chrome tokens + palette lock
+ * @sdd-task: Task #4 - Dashboard page: list + Control + create-index
  * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
- * @sdd-decision: SDD-ADR-005 - Chrome grayscale; lock colorForLabel and EdgeLines hex
- * @sdd-why: Gauge healthy fill was teal chrome; >80 red and >50 amber stay semantic
- * @human-debug: If healthy bar is teal → gaugeFillColor still returns old accent hex
+ * @sdd-decision: SDD-ADR-002 - Stacked Dashboard: list then Control, one ScrollArea
+ * @sdd-why: embedded skips nested ScrollArea so Dashboard owns the single max-w-4xl surface
+ * @human-debug: If Control clips/polls die → embedded false or a second ScrollArea wrapped this
  */
 import { useState, useEffect, useCallback } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -140,7 +140,11 @@ function LogViewer() {
 
 /* ── Main Control Tab ───────────────────────────────────── */
 
-export function ControlTab() {
+interface ControlTabProps {
+  embedded?: boolean;
+}
+
+export function ControlTab({ embedded = false }: ControlTabProps) {
   const t = useUiMessages();
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
   const [selfMetrics, setSelfMetrics] = useState({ rss_mb: 0, user_cpu: 0, sys_cpu: 0 });
@@ -169,51 +173,58 @@ export function ControlTab() {
   const totalCpu = processes.reduce((s, p) => s + p.cpu, 0);
   const totalRam = processes.reduce((s, p) => s + p.rss_mb, 0);
 
+  const body = (
+    <>
+      <h2 className="text-[15px] font-semibold text-foreground/80 mb-6">{t.control.panel}</h2>
+
+      <div className="flex gap-4 mb-8">
+        <Gauge label={t.control.totalCpu} value={totalCpu} max={100 * processes.length || 100} unit="%" color="text-foreground/80" />
+        <Gauge label={t.control.totalRam} value={totalRam} max={4096} unit="MB" color="text-foreground/80" />
+        <Gauge label={t.control.processes} value={processes.length} max={10} unit="" color="text-primary" />
+        <Gauge label={t.control.selfRam} value={selfMetrics.rss_mb} max={2048} unit="MB" color="text-primary" />
+      </div>
+
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-[13px] font-medium text-foreground/50">
+            {t.control.activeProcesses}
+          </h3>
+          <button
+            onClick={() => { void fetchProcesses(); }}
+            className="text-[11px] text-primary/60 hover:text-primary transition-colors"
+          >
+            {t.common.refresh}
+          </button>
+        </div>
+
+        {processes.length === 0 ? (
+          <p className="text-foreground/20 text-[12px] text-center py-8">{t.control.noProcesses}</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            {processes.map((p) => (
+              <ProcessCard
+                key={p.pid}
+                proc={p}
+                selected={selectedPid === p.pid}
+                onSelect={() => setSelectedPid(selectedPid === p.pid ? null : p.pid)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <LogViewer />
+    </>
+  );
+
+  if (embedded) {
+    return <div>{body}</div>;
+  }
+
   return (
     <ScrollArea className="h-full">
       <div className="p-8 max-w-4xl mx-auto">
-        <h2 className="text-[15px] font-semibold text-foreground/80 mb-6">{t.control.panel}</h2>
-
-        {/* Aggregate gauges */}
-        <div className="flex gap-4 mb-8">
-          <Gauge label={t.control.totalCpu} value={totalCpu} max={100 * processes.length || 100} unit="%" color="text-foreground/80" />
-          <Gauge label={t.control.totalRam} value={totalRam} max={4096} unit="MB" color="text-foreground/80" />
-          <Gauge label={t.control.processes} value={processes.length} max={10} unit="" color="text-primary" />
-          <Gauge label={t.control.selfRam} value={selfMetrics.rss_mb} max={2048} unit="MB" color="text-primary" />
-        </div>
-
-        {/* Process grid */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-[13px] font-medium text-foreground/50">
-              {t.control.activeProcesses}
-            </h3>
-            <button
-              onClick={fetchProcesses}
-              className="text-[11px] text-primary/60 hover:text-primary transition-colors"
-            >
-              {t.common.refresh}
-            </button>
-          </div>
-
-          {processes.length === 0 ? (
-            <p className="text-foreground/20 text-[12px] text-center py-8">{t.control.noProcesses}</p>
-          ) : (
-            <div className="grid grid-cols-2 gap-3">
-              {processes.map((p) => (
-                <ProcessCard
-                  key={p.pid}
-                  proc={p}
-                  selected={selectedPid === p.pid}
-                  onSelect={() => setSelectedPid(selectedPid === p.pid ? null : p.pid)}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Log viewer */}
-        <LogViewer />
+        {body}
       </div>
     </ScrollArea>
   );

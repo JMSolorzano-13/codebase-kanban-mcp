@@ -45,4 +45,15 @@ int cbm_daemon_application_busy_queue_waits_for_test(void);
 char *cbm_daemon_application_framable_response_for_test(char *response,
                                                         const cbm_jsonrpc_request_t *request);
 
+/*
+ * @sdd-task: Task #2 - Pipeline hook + `.sdd-skill` skip
+ * @sdd-spec: specs/spec-004-j8k-adr-parse-on-reindex/spec.md
+ * @sdd-decision: SDD-ADR-019 watcher false; equality strips the key
+ * @sdd-why: Test seam for watcher args vs user subscribe
+ * @human-debug: equal false for watcher vs user JSON → strip missing in application.c:1581
+ */
+bool cbm_daemon_application_index_args_equal_for_test(const char *left, const char *right);
+char *cbm_daemon_application_watcher_index_args_for_test(const char *root_path,
+                                                         const char *project_name);
+
 #endif /* CBM_DAEMON_APPLICATION_INTERNAL_H */

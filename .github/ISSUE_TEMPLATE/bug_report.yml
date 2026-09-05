@@ -17,8 +17,8 @@ body:
     id: version
     attributes:
       label: Version
-      description: Output of `codebase-memory-mcp --version`
-      placeholder: codebase-memory-mcp 0.8.1
+      description: Output of `codebase-memory-mcp --version` (binary name is unchanged from upstream)
+      placeholder: codebase-memory-mcp (built from this repository)
     validations:
       required: true
 
@@ -39,15 +39,11 @@ body:
     id: channel
     attributes:
       label: Install channel
+      description: This fork is clone-and-build. npm/PyPI/Homebrew packages are upstream DeusData, not this tree.
       options:
-        - GitHub release archive / install.sh / install.ps1
-        - npm
-        - PyPI
-        - Homebrew
-        - AUR
-        - Scoop / Winget / Chocolatey
-        - go install
-        - Built from source
+        - Built from this repository (scripts/build.sh)
+        - Upstream binary (DeusData release / npm / Homebrew) plus this UI tree
+        - Other
     validations:
       required: true
 

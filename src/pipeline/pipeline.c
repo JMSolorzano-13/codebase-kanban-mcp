@@ -36,6 +36,7 @@ enum { CBM_DIR_PERMS = 0755, PL_RING = 4, PL_RING_MASK = 3, PL_SEQ_PASSES = 6 };
 #include "foundation/compat_thread.h"
 #include "foundation/profile.h"
 #include "foundation/mem.h"
+#include "adr/adr_fill.h"
 
 #include <errno.h>
 #include <stdint.h>
@@ -193,6 +194,9 @@ struct cbm_pipeline {
      * can be restored after the rebuild. NULL when no ADR existed. Issue #516. */
     char *saved_adr;
 
+    /* User-triggered trio fill (SDD-ADR-019). cbm_pipeline_new leaves false. */
+    bool adr_fill;
+
     /* Per-file LSP surfaces serialized at the collect_all_defs seam (the only
      * moment the result cache is alive), persisted by dump_and_persist_hashes
      * so the closure-repair incremental route can early-cutoff on surface
@@ -270,6 +274,7 @@ cbm_pipeline_t *cbm_pipeline_new(const char *repo_path, const char *db_path,
     p->branch_qn = cbm_git_context_branch_qn(p->project_name, &p->git_ctx);
     p->mode = mode;
     p->persistence = false;
+    p->adr_fill = false;
     p->committed_nodes = -1;
     p->committed_edges = -1;
     atomic_init(&p->cancelled_storage, 0);
@@ -300,6 +305,54 @@ void cbm_pipeline_set_persistence(cbm_pipeline_t *p, bool enabled) {
     if (p) {
         p->persistence = enabled;
     }
+}
+
+/*
+ * @sdd-task: Task #2 - Pipeline hook + `.sdd-skill` skip
+ * @sdd-spec: specs/spec-004-j8k-adr-parse-on-reindex/spec.md
+ * @sdd-decision: SDD-ADR-019 fill after capture; intent flag not route
+ * @sdd-why: new() stays false; apply never fails the job
+ * @human-debug: Markers missing on user persist → flag still false (277) or apply not called (1990)
+ */
+void cbm_pipeline_set_adr_fill(cbm_pipeline_t *p, bool enabled) {
+    if (p) {
+        p->adr_fill = enabled;
+    }
+}
+
+bool cbm_pipeline_get_adr_fill(const cbm_pipeline_t *p) {
+    return p && p->adr_fill;
+}
+
+void cbm_pipeline_apply_adr_fill(cbm_pipeline_t *p, char **saved_adr) {
+    char *filled;
+
+    if (!p || !p->adr_fill || !saved_adr) {
+        return;
+    }
+    filled = cbm_adr_fill_document(p->repo_path, *saved_adr);
+    if (!filled) {
+        return;
+    }
+    free(*saved_adr);
+    *saved_adr = filled;
+}
+
+bool cbm_pipeline_adr_fill_would_change(cbm_pipeline_t *p, const char *existing) {
+    char *probe;
+    bool changed;
+
+    if (!p || !p->adr_fill) {
+        return false;
+    }
+    probe = existing ? strdup(existing) : NULL;
+    if (existing && !probe) {
+        return false;
+    }
+    cbm_pipeline_apply_adr_fill(p, &probe);
+    changed = probe && (!existing || strcmp(probe, existing) != 0);
+    free(probe);
+    return changed;
 }
 
 bool cbm_pipeline_set_project_name(cbm_pipeline_t *p, const char *name) {
@@ -1705,6 +1758,13 @@ int cbm_pipeline_publish_generation(const cbm_pipeline_generation_t *generation)
  * the dump path's delete-all-and-rebuild; the delta path passes false
  * because its patch step already wrote row-level FTS inserts for exactly
  * the nodes it created. */
+/**
+ * @sdd-task: Task #3 - HTTP POST + GET merge + C Gherkin + publish copy
+ * @sdd-spec: specs/spec-012-m2k-game-expand-archive-deps/spec.md
+ * @sdd-decision: SDD-ADR-033 spec_archive; SDD-ADR-053 game_archive live→stage
+ * @sdd-why: dump replace would drop archive flags; incremental clone already keeps the tables
+ * @human-debug: Flags vanish after Reindex → copy after ADR write failed or was skipped
+ */
 int cbm_pipeline_publish_staged(char *stage_path, const cbm_pipeline_generation_t *generation,
                                 bool fts_wholesale, bool destination_known_healthy) {
     struct timespec t_pub;
@@ -1735,6 +1795,21 @@ int cbm_pipeline_publish_staged(char *stage_path, const cbm_pipeline_generation_
     if (ok && generation->adr_content) {
         ok = cbm_store_adr_store(store, generation->project, generation->adr_content) ==
              CBM_STORE_OK;
+    }
+    /* SDD-ADR-033 / SDD-ADR-053: dump replace drops extra tables; copy flags
+     * from live after ADR write. Missing live db/table is OK; copy fail fails
+     * publish. Do not change adr_fill. */
+    if (ok && generation->final_db_path && generation->final_db_path[0]) {
+        cbm_store_t *live = cbm_store_open_path_query(generation->final_db_path);
+        if (live) {
+            if (cbm_store_spec_archive_copy(live, store) != CBM_STORE_OK) {
+                ok = false;
+            }
+            if (ok && cbm_store_game_archive_copy(live, store) != CBM_STORE_OK) {
+                ok = false;
+            }
+            cbm_store_close(live);
+        }
     }
     cbm_log_info("publish.timing", "block", "writes", "elapsed_ms",
                  itoa_buf((int)elapsed_ms(t_pub)));
@@ -1940,6 +2015,8 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_hash_t *bas
             }
         }
     }
+    /* Capture-then-splice before publish. Fill failure keeps prior saved_adr. */
+    cbm_pipeline_apply_adr_fill(p, &p->saved_adr);
     cbm_pipeline_generation_t generation = {
         .gbuf = p->gbuf,
         .final_db_path = db_path,

@@ -1,5 +1,5 @@
 # Feature Checklist — Spec-003: Path–Project Identity
-Start Date: 2026-08-29 / Target Close Date: TBD
+Start Date: 2026-08-29 / Target Close Date: 2026-08-30 | Closed: 2026-08-30
 
 ## Definition of Done (per task, @implementer checks before submitting to @review)
 ### Task #1 — Catalog + list fields
@@ -56,9 +56,21 @@ Task #4 DEV 2026-08-29 (Vitest; Playwright not run — LEVEL 1):
 | graph-ui Task #4 files | 31/31 | PASS DEV | includes spec-001/002 App routing regression |
 Task #4 Gherkin owned here: US-001/006. Reindex Gherkin waits for #5.
 
+Task #5 DEV 2026-08-29 (Vitest; Playwright not run — LEVEL 1):
+| Test Suite | Coverage | Status | Notes |
+| Dashboard.test.tsx Reindex | 4/4 | PASS DEV | POST {root_path, project} + IndexProgress; custom name; 500 alert+row; conflict member Reindex |
+| App.test.tsx Task #5 | 4/4 Gherkin+header | PASS DEV | Reindex 202 stay ?tab=dashboard; custom keeps name; 500 stay no tab=graph; header has no Reindex |
+| i18n.test.ts | 6/6 | PASS DEV | reindex / reindexError / nameExists en+zh |
+| colors.test.ts | 3/3 | PASS DEV | colorForLabel("Function") === #06b6d4 |
+| WorkspaceHeader.test.tsx | 4/4 | PASS DEV | has no Reindex control |
+| graph-ui Task #5 files | 57/57 | PASS DEV | Dashboard+App+i18n+colors+WorkspaceHeader |
+Task #5 Gherkin owned here: US-002/007. All spec-003 DEV Gherkin mapped. CERT at closeprep if required.
+
 ## Human Validation — @human-trainer fills
-[x] task summaries done [ ] spec summary done [x] architecture diagram updated [x] QUICK-DEBUG updated [ ] PROJECT-OVERVIEW updated [x] @sdd-* headers present [ ] human confirmed "✅ Read and understood"
-Task #2 summary: `human/task-summaries/task-2-admit-create-reindex.md`
+[x] task summaries done [x] spec summary done [x] architecture diagram updated [x] QUICK-DEBUG updated [x] PROJECT-OVERVIEW updated [x] @sdd-* headers present [ ] human confirmed "✅ Read and understood"
+Task summaries: `human/task-summaries/task-1-identity-catalog-list-fields.md` … `task-5-dashboard-reindex.md`
+Spec summary: `human/spec-summaries/spec-003-h7q-path-project-identity.md`
+CONSTITUTION RECOMMENDATION: rewrite IV.1 (see spec-summary). Blocked on human close phrase.
 
 ## Deployment Readiness
 [ ] merged to main [ ] migrations ready+tested [ ] env vars documented [ ] secrets configured [ ] monitoring/alerts set [ ] rollback plan [ ] release notes
@@ -68,7 +80,7 @@ Task #2 summary: `human/task-summaries/task-2-admit-create-reindex.md`
 | DoD | 60 | IN PROGRESS |
 | Code Quality | 40 | IN PROGRESS |
 | Testing | 40 | IN PROGRESS |
-| Human Validation | 10 | IN PROGRESS |
+| Human Validation | 80 | IN PROGRESS |
 | TOTAL | 30 | IN PROGRESS |
 
 ## Closure Criteria (ALL required)

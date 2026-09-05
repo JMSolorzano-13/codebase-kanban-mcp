@@ -321,6 +321,25 @@ static int init_schema(cbm_store_t *s) {
         "  ignored_files_total INTEGER NOT NULL DEFAULT 0,"
         "  coverage_version INTEGER NOT NULL DEFAULT 1,"
         "  hash_records_complete INTEGER NOT NULL DEFAULT 0"
+        ");"
+        /* Spec archive flags (SDD-ADR-029). Project identity is this .db
+         * filename, not a column. No FK: leftover ids stay after a spec
+         * folder disappears. Write-open creates the table; query-open skips
+         * init_schema and load probes sqlite_master. */
+        "CREATE TABLE IF NOT EXISTS spec_archive ("
+        "  spec_id TEXT PRIMARY KEY,"
+        "  archived INTEGER NOT NULL CHECK (archived IN (0, 1)),"
+        "  updated_at TEXT NOT NULL"
+        ");"
+        /* Game archive flags (SDD-ADR-052). Sibling of spec_archive, not the
+         * same table: PK is card_id (path up to 255 bytes). Project identity
+         * is this .db filename, not a column. No FK: leftover ids stay after
+         * a card disappears. Write-open creates the table; query-open skips
+         * init_schema and load probes sqlite_master. */
+        "CREATE TABLE IF NOT EXISTS game_archive ("
+        "  card_id TEXT PRIMARY KEY,"
+        "  archived INTEGER NOT NULL CHECK (archived IN (0, 1)),"
+        "  updated_at TEXT NOT NULL"
         ");";
 
     int rc = exec_sql(s, ddl);
@@ -8150,6 +8169,306 @@ void cbm_store_adr_free(cbm_adr_t *adr) {
     safe_str_free(&adr->created_at);
     safe_str_free(&adr->updated_at);
     memset(adr, 0, sizeof(*adr));
+}
+
+/**
+ * @sdd-task: Task #1 - Store spec_archive table + set/load/copy
+ * @sdd-spec: specs/spec-006-k3n-spec-archive/spec.md
+ * @sdd-decision: SDD-ADR-029 - spec_archive table in the project .db
+ * @sdd-why: Query-open skips init_schema; a missing table is zero flags, not a read failure
+ * @human-debug: If GET treats a legacy .db as 500 → load must return OK count 0 on SQLITE_DONE probe
+ */
+static int spec_archive_table_probe(cbm_store_t *s) {
+    sqlite3_stmt *table_stmt = NULL;
+    int rc = sqlite3_prepare_v2(
+        s->db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='spec_archive' LIMIT 1;",
+        CBM_NOT_FOUND, &table_stmt, NULL);
+    if (rc != SQLITE_OK) {
+        store_set_error_sqlite(s, "spec_archive table probe");
+        return CBM_STORE_ERR;
+    }
+    rc = sqlite3_step(table_stmt);
+    if (rc == SQLITE_DONE) {
+        sqlite3_finalize(table_stmt);
+        return CBM_STORE_NOT_FOUND;
+    }
+    if (rc != SQLITE_ROW || sqlite3_finalize(table_stmt) != SQLITE_OK) {
+        store_set_error_sqlite(s, "spec_archive table probe step");
+        return CBM_STORE_ERR;
+    }
+    return CBM_STORE_OK;
+}
+
+int cbm_store_spec_archive_set(cbm_store_t *s, const char *spec_id, int archived) {
+    char now[CBM_SZ_32];
+    sqlite3_stmt *stmt = NULL;
+    int flag;
+    int rc;
+
+    if (!s || !s->db) {
+        return CBM_STORE_ERR;
+    }
+    if (!spec_id || !spec_id[0]) {
+        store_set_error(s, "spec_archive_set: empty spec_id");
+        return CBM_STORE_ERR;
+    }
+    if (strlen(spec_id) >= 192) {
+        store_set_error(s, "spec_archive_set: spec_id too long");
+        return CBM_STORE_ERR;
+    }
+    flag = archived ? 1 : 0;
+    iso_now(now, sizeof(now));
+
+    const char *sql = "INSERT INTO spec_archive (spec_id, archived, updated_at) "
+                      "VALUES (?1, ?2, ?3) "
+                      "ON CONFLICT(spec_id) DO UPDATE SET "
+                      "archived=excluded.archived, updated_at=excluded.updated_at";
+    if (sqlite3_prepare_v2(s->db, sql, CBM_NOT_FOUND, &stmt, NULL) != SQLITE_OK) {
+        store_set_error_sqlite(s, "spec_archive_set");
+        return CBM_STORE_ERR;
+    }
+    bind_text(stmt, SKIP_ONE, spec_id);
+    sqlite3_bind_int(stmt, ST_COL_2, flag);
+    bind_text(stmt, ST_COL_3, now);
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return (rc == SQLITE_DONE) ? CBM_STORE_OK : CBM_STORE_ERR;
+}
+
+int cbm_store_spec_archive_load(cbm_store_t *s, cbm_spec_archive_row_t *out, int cap, int *count) {
+    sqlite3_stmt *stmt = NULL;
+    int probe;
+    int limit;
+    int n = 0;
+    int step_rc;
+
+    if (!s || !s->db || !count) {
+        return CBM_STORE_ERR;
+    }
+    *count = 0;
+    if (cap < 0) {
+        store_set_error(s, "spec_archive_load: negative cap");
+        return CBM_STORE_ERR;
+    }
+    if (cap > 0 && !out) {
+        store_set_error(s, "spec_archive_load: null out");
+        return CBM_STORE_ERR;
+    }
+
+    probe = spec_archive_table_probe(s);
+    if (probe == CBM_STORE_NOT_FOUND) {
+        return CBM_STORE_OK;
+    }
+    if (probe != CBM_STORE_OK) {
+        return CBM_STORE_ERR;
+    }
+    if (cap == 0) {
+        return CBM_STORE_OK;
+    }
+
+    limit = cap > CBM_SPEC_ARCHIVE_CAP ? CBM_SPEC_ARCHIVE_CAP : cap;
+    if (sqlite3_prepare_v2(s->db, "SELECT spec_id, archived FROM spec_archive LIMIT ?1;",
+                           CBM_NOT_FOUND, &stmt, NULL) != SQLITE_OK) {
+        store_set_error_sqlite(s, "spec_archive_load");
+        return CBM_STORE_ERR;
+    }
+    sqlite3_bind_int(stmt, SKIP_ONE, limit);
+    while ((step_rc = sqlite3_step(stmt)) == SQLITE_ROW && n < limit) {
+        const unsigned char *id = sqlite3_column_text(stmt, 0);
+        size_t id_len;
+
+        if (!id || !id[0]) {
+            continue;
+        }
+        id_len = strlen((const char *)id);
+        if (id_len >= sizeof(out[n].spec_id)) {
+            id_len = sizeof(out[n].spec_id) - 1;
+        }
+        memcpy(out[n].spec_id, id, id_len);
+        out[n].spec_id[id_len] = '\0';
+        out[n].archived = sqlite3_column_int(stmt, SKIP_ONE) ? 1 : 0;
+        n++;
+    }
+    if (step_rc != SQLITE_DONE && step_rc != SQLITE_ROW) {
+        store_set_error_sqlite(s, "spec_archive_load step");
+        sqlite3_finalize(stmt);
+        return CBM_STORE_ERR;
+    }
+    sqlite3_finalize(stmt);
+    *count = n;
+    return CBM_STORE_OK;
+}
+
+int cbm_store_spec_archive_copy(cbm_store_t *src, cbm_store_t *dst) {
+    cbm_spec_archive_row_t rows[CBM_SPEC_ARCHIVE_CAP];
+    int n = 0;
+    int i;
+    int rc;
+
+    if (!src || !dst) {
+        return CBM_STORE_ERR;
+    }
+    rc = cbm_store_spec_archive_load(src, rows, CBM_SPEC_ARCHIVE_CAP, &n);
+    if (rc != CBM_STORE_OK) {
+        return rc;
+    }
+    for (i = 0; i < n; i++) {
+        rc = cbm_store_spec_archive_set(dst, rows[i].spec_id, rows[i].archived);
+        if (rc != CBM_STORE_OK) {
+            return rc;
+        }
+    }
+    return CBM_STORE_OK;
+}
+
+/**
+ * @sdd-task: Task #1 - Store game_archive table + set/load/copy
+ * @sdd-spec: specs/spec-012-m2k-game-expand-archive-deps/spec.md
+ * @sdd-decision: SDD-ADR-052 - game_archive table; not spec_archive
+ * @sdd-why: Game archive flags live in the project .db; query-open skips init_schema so missing table is empty not ERR
+ * @human-debug: Missing-table tests DROP game_archive then load/copy — probe must be sqlite_master
+ */
+static int game_archive_table_probe(cbm_store_t *s) {
+    sqlite3_stmt *table_stmt = NULL;
+    int rc = sqlite3_prepare_v2(
+        s->db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='game_archive' LIMIT 1;",
+        CBM_NOT_FOUND, &table_stmt, NULL);
+    if (rc != SQLITE_OK) {
+        store_set_error_sqlite(s, "game_archive table probe");
+        return CBM_STORE_ERR;
+    }
+    rc = sqlite3_step(table_stmt);
+    if (rc == SQLITE_DONE) {
+        sqlite3_finalize(table_stmt);
+        return CBM_STORE_NOT_FOUND;
+    }
+    if (rc != SQLITE_ROW || sqlite3_finalize(table_stmt) != SQLITE_OK) {
+        store_set_error_sqlite(s, "game_archive table probe step");
+        return CBM_STORE_ERR;
+    }
+    return CBM_STORE_OK;
+}
+
+int cbm_store_game_archive_set(cbm_store_t *s, const char *card_id, int archived) {
+    char now[CBM_SZ_32];
+    sqlite3_stmt *stmt = NULL;
+    int flag;
+    int rc;
+
+    if (!s || !s->db) {
+        return CBM_STORE_ERR;
+    }
+    if (!card_id || !card_id[0]) {
+        store_set_error(s, "game_archive_set: empty card_id");
+        return CBM_STORE_ERR;
+    }
+    if (strlen(card_id) >= 256) {
+        store_set_error(s, "game_archive_set: card_id too long");
+        return CBM_STORE_ERR;
+    }
+    flag = archived ? 1 : 0;
+    iso_now(now, sizeof(now));
+
+    const char *sql = "INSERT INTO game_archive (card_id, archived, updated_at) "
+                      "VALUES (?1, ?2, ?3) "
+                      "ON CONFLICT(card_id) DO UPDATE SET "
+                      "archived=excluded.archived, updated_at=excluded.updated_at";
+    if (sqlite3_prepare_v2(s->db, sql, CBM_NOT_FOUND, &stmt, NULL) != SQLITE_OK) {
+        store_set_error_sqlite(s, "game_archive_set");
+        return CBM_STORE_ERR;
+    }
+    bind_text(stmt, SKIP_ONE, card_id);
+    sqlite3_bind_int(stmt, ST_COL_2, flag);
+    bind_text(stmt, ST_COL_3, now);
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return (rc == SQLITE_DONE) ? CBM_STORE_OK : CBM_STORE_ERR;
+}
+
+int cbm_store_game_archive_load(cbm_store_t *s, cbm_game_archive_row_t *out, int cap, int *count) {
+    sqlite3_stmt *stmt = NULL;
+    int probe;
+    int limit;
+    int n = 0;
+    int step_rc;
+
+    if (!s || !s->db || !count) {
+        return CBM_STORE_ERR;
+    }
+    *count = 0;
+    if (cap < 0) {
+        store_set_error(s, "game_archive_load: negative cap");
+        return CBM_STORE_ERR;
+    }
+    if (cap > 0 && !out) {
+        store_set_error(s, "game_archive_load: null out");
+        return CBM_STORE_ERR;
+    }
+
+    probe = game_archive_table_probe(s);
+    if (probe == CBM_STORE_NOT_FOUND) {
+        return CBM_STORE_OK;
+    }
+    if (probe != CBM_STORE_OK) {
+        return CBM_STORE_ERR;
+    }
+    if (cap == 0) {
+        return CBM_STORE_OK;
+    }
+
+    limit = cap > CBM_GAME_ARCHIVE_CAP ? CBM_GAME_ARCHIVE_CAP : cap;
+    if (sqlite3_prepare_v2(s->db, "SELECT card_id, archived FROM game_archive LIMIT ?1;",
+                           CBM_NOT_FOUND, &stmt, NULL) != SQLITE_OK) {
+        store_set_error_sqlite(s, "game_archive_load");
+        return CBM_STORE_ERR;
+    }
+    sqlite3_bind_int(stmt, SKIP_ONE, limit);
+    while ((step_rc = sqlite3_step(stmt)) == SQLITE_ROW && n < limit) {
+        const unsigned char *id = sqlite3_column_text(stmt, 0);
+        size_t id_len;
+
+        if (!id || !id[0]) {
+            continue;
+        }
+        id_len = strlen((const char *)id);
+        if (id_len >= sizeof(out[n].card_id)) {
+            id_len = sizeof(out[n].card_id) - 1;
+        }
+        memcpy(out[n].card_id, id, id_len);
+        out[n].card_id[id_len] = '\0';
+        out[n].archived = sqlite3_column_int(stmt, SKIP_ONE) ? 1 : 0;
+        n++;
+    }
+    if (step_rc != SQLITE_DONE && step_rc != SQLITE_ROW) {
+        store_set_error_sqlite(s, "game_archive_load step");
+        sqlite3_finalize(stmt);
+        return CBM_STORE_ERR;
+    }
+    sqlite3_finalize(stmt);
+    *count = n;
+    return CBM_STORE_OK;
+}
+
+int cbm_store_game_archive_copy(cbm_store_t *src, cbm_store_t *dst) {
+    cbm_game_archive_row_t rows[CBM_GAME_ARCHIVE_CAP];
+    int n = 0;
+    int i;
+    int rc;
+
+    if (!src || !dst) {
+        return CBM_STORE_ERR;
+    }
+    rc = cbm_store_game_archive_load(src, rows, CBM_GAME_ARCHIVE_CAP, &n);
+    if (rc != CBM_STORE_OK) {
+        return rc;
+    }
+    for (i = 0; i < n; i++) {
+        rc = cbm_store_game_archive_set(dst, rows[i].card_id, rows[i].archived);
+        if (rc != CBM_STORE_OK) {
+            return rc;
+        }
+    }
+    return CBM_STORE_OK;
 }
 
 /* ── Architecture doc discovery ────────────────────────────────── */

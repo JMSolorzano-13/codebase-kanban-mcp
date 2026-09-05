@@ -778,6 +778,42 @@ int cbm_store_adr_update_sections(cbm_store_t *s, const char *project, const cha
                                   const char **values, int count, cbm_adr_t *out);
 void cbm_store_adr_free(cbm_adr_t *adr);
 
+/**
+ * @sdd-task: Task #1 - Store spec_archive table + set/load/copy
+ * @sdd-spec: specs/spec-006-k3n-spec-archive/spec.md
+ * @sdd-decision: SDD-ADR-029 - spec_archive table in the project .db
+ * @sdd-why: Archive flags must outlive restart without writing .sdd-skill/ or mixing ADR/meta
+ * @human-debug: Missing table on query-open must be count 0 OK, not ERR — see sqlite_master probe
+ */
+#define CBM_SPEC_ARCHIVE_CAP 64
+
+typedef struct {
+    char spec_id[192];
+    int archived; /* 0 or 1 */
+} cbm_spec_archive_row_t;
+
+int cbm_store_spec_archive_set(cbm_store_t *s, const char *spec_id, int archived);
+int cbm_store_spec_archive_load(cbm_store_t *s, cbm_spec_archive_row_t *out, int cap, int *count);
+int cbm_store_spec_archive_copy(cbm_store_t *src, cbm_store_t *dst);
+
+/**
+ * @sdd-task: Task #1 - Store game_archive table + set/load/copy
+ * @sdd-spec: specs/spec-012-m2k-game-expand-archive-deps/spec.md
+ * @sdd-decision: SDD-ADR-052 - game_archive table; not spec_archive
+ * @sdd-why: Game archive flags live in the project .db; query-open skips init_schema so missing table is empty not ERR
+ * @human-debug: Missing-table tests DROP game_archive then load/copy — probe must be sqlite_master
+ */
+#define CBM_GAME_ARCHIVE_CAP 512
+
+typedef struct {
+    char card_id[256];
+    int archived; /* 0 or 1 */
+} cbm_game_archive_row_t;
+
+int cbm_store_game_archive_set(cbm_store_t *s, const char *card_id, int archived);
+int cbm_store_game_archive_load(cbm_store_t *s, cbm_game_archive_row_t *out, int cap, int *count);
+int cbm_store_game_archive_copy(cbm_store_t *src, cbm_store_t *dst);
+
 /* ADR section parsing/rendering (pure functions, no store needed) */
 
 enum { PROPS_MAX = 16 };

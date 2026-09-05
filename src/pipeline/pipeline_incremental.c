@@ -1946,6 +1946,7 @@ static int run_closure_delta(cbm_pipeline_t *p, const char *db_path, const char 
     int manifest_count = 0;
     cbm_coverage_row_t *cov = NULL;
     int cov_n = 0;
+    char *filled_adr = NULL;
 
     cbm_clock_gettime(CLOCK_MONOTONIC, &t);
     if (cbm_delta_stage_clone(db_path, &stage) != 0) {
@@ -2272,6 +2273,25 @@ static int run_closure_delta(cbm_pipeline_t *p, const char *db_path, const char 
                                       cbm_store_count_edges(staging, project));
     cbm_log_info("delta.committed_counts", "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
 
+    /* @sdd-task: Task #2 - splice after capture on incremental persist (SDD-ADR-019) */
+    /* User-triggered: splice after capture, then publish over the clone ADR. */
+    if (cbm_pipeline_get_adr_fill(p)) {
+        cbm_adr_t existing_adr = {0};
+        int adr_rc = cbm_store_adr_get(staging, project, &existing_adr);
+        if (adr_rc == CBM_STORE_OK && existing_adr.content) {
+            filled_adr = strdup(existing_adr.content);
+            cbm_store_adr_free(&existing_adr);
+            if (filled_adr) {
+                cbm_pipeline_apply_adr_fill(p, &filled_adr);
+            }
+        } else {
+            cbm_store_adr_free(&existing_adr);
+            if (adr_rc == CBM_STORE_OK || adr_rc == CBM_STORE_NOT_FOUND) {
+                cbm_pipeline_apply_adr_fill(p, &filled_adr);
+            }
+        }
+    }
+
     {
         int index_mode = cbm_pipeline_get_mode(p);
         cbm_pipeline_generation_t generation = {
@@ -2281,7 +2301,7 @@ static int run_closure_delta(cbm_pipeline_t *p, const char *db_path, const char 
             .cancelled = cbm_pipeline_cancelled_ptr(p),
             .manifest = manifest,
             .manifest_count = manifest_count,
-            .adr_content = NULL, /* the clone already carries the ADR rows */
+            .adr_content = filled_adr,
             .coverage = cov,
             .coverage_count = cov_n,
             .coverage_meta =
@@ -2355,6 +2375,7 @@ out:
     free(deleted);
     free_mode_skipped(mode_skipped, mode_skipped_count);
     cbm_store_free_coverage(old_cov, old_cov_count);
+    free(filled_adr);
     return result;
 }
 
@@ -2417,11 +2438,26 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
                                                            baseline_count);
         cbm_store_coverage_meta_clear(&meta);
         if (exact) {
+            /* Trio files are ALWAYS_SKIP, so they never dirty the manifest.
+             * Rebuild only when fill would change the stored ADR. */
+            bool want_rebuild = false;
+            if (cbm_pipeline_get_adr_fill(p)) {
+                cbm_adr_t existing = {0};
+                int adr_rc = cbm_store_adr_get(store, project, &existing);
+                const char *prior = (adr_rc == CBM_STORE_OK) ? existing.content : NULL;
+                want_rebuild = cbm_pipeline_adr_fill_would_change(p, prior);
+                cbm_store_adr_free(&existing);
+            }
             cbm_store_free_file_hashes(stored, stored_count);
             cbm_store_close(store);
 #if defined(CBM_INCREMENTAL_TEST_API) && CBM_INCREMENTAL_TEST_API
-            incr_test_set_last_route(CBM_INCREMENTAL_ROUTE_NOOP);
+            incr_test_set_last_route(want_rebuild ? CBM_INCREMENTAL_ROUTE_FORCED_FULL
+                                                  : CBM_INCREMENTAL_ROUTE_NOOP);
 #endif
+            if (want_rebuild) {
+                cbm_log_info("incremental.force_full", "reason", "adr_fill");
+                return CBM_PIPELINE_FORCE_FULL_REINDEX;
+            }
             cbm_log_info("incremental.noop", "reason", "semantic_manifest_equal");
             return cbm_pipeline_refresh_artifact(p, db_path);
         }
@@ -2479,16 +2515,26 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
      * which means existing hash rows (including for any mode-skipped files
      * that were already preserved by an earlier run) remain intact. */
     if (!closure_active && n_changed == 0 && deleted_count == 0) {
+        bool want_rebuild = false;
+        if (cbm_pipeline_get_adr_fill(p)) {
+            cbm_adr_t existing = {0};
+            int adr_rc = cbm_store_adr_get(store, project, &existing);
+            const char *prior = (adr_rc == CBM_STORE_OK) ? existing.content : NULL;
+            want_rebuild = cbm_pipeline_adr_fill_would_change(p, prior);
+            cbm_store_adr_free(&existing);
+        }
 #if defined(CBM_INCREMENTAL_TEST_API) && CBM_INCREMENTAL_TEST_API
-        incr_test_set_last_route(CBM_INCREMENTAL_ROUTE_NOOP);
+        incr_test_set_last_route(want_rebuild ? CBM_INCREMENTAL_ROUTE_FORCED_FULL
+                                              : CBM_INCREMENTAL_ROUTE_NOOP);
 #endif
-        cbm_log_info("incremental.noop", "reason", "no_changes");
+        cbm_log_info(want_rebuild ? "incremental.force_full" : "incremental.noop", "reason",
+                     want_rebuild ? "adr_fill" : "no_changes");
         free(is_changed);
         free(deleted);
         free_mode_skipped(mode_skipped, mode_skipped_count);
         cbm_store_free_file_hashes(stored, stored_count);
         cbm_store_close(store);
-        return 0;
+        return want_rebuild ? CBM_PIPELINE_FORCE_FULL_REINDEX : 0;
     }
 
 #if defined(CBM_INCREMENTAL_TEST_API) && CBM_INCREMENTAL_TEST_API
@@ -2848,6 +2894,8 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
      * re-parsed files have no codec output, and publishing a stale row
      * would satisfy a future closure plan with yesterday's surface; an
      * empty table just routes the next incremental to a full rebuild. */
+    /* @sdd-task: Task #2 - same apply before dump_and_persist; flag false is a no-op */
+    cbm_pipeline_apply_adr_fill(p, &saved_adr);
     int persist_rc = dump_and_persist(
         existing, db_path, project, cbm_pipeline_cancelled_ptr(p), manifest, manifest_count,
         saved_adr, cbm_pipeline_repo_path(p), cov, cov_n, &coverage_meta, NULL, 0);

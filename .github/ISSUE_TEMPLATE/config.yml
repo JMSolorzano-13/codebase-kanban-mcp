@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/DeusData/codebase-memory-mcp/security/advisories/new
-    about: Please report security issues privately — never in a public issue. See SECURITY.md.
+    url: https://github.com/JMSolorzano-13/codebase-kanban-mcp/issues/new?labels=bug
+    about: Report security issues in this fork here. Upstream engine advisories go to DeusData/codebase-memory-mcp.
+  - name: Upstream engine (DeusData)
+    url: https://github.com/DeusData/codebase-memory-mcp
+    about: The original C MCP server — npm/PyPI/Homebrew releases and engine-only bugs belong there.

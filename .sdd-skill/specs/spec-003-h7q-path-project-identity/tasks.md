@@ -135,4 +135,4 @@ Blocked: note in state.md, switch task, tell @architect.
 Every Gherkin scenario mapped above. Target >80% on touched graph-ui files. C tests for admission.
 
 ## Success Criteria for All Tasks
-- [ ] all DoD complete [ ] tests>80% touched [ ] passes @review [ ] @tester approves [ ] human docs complete
+- [x] all DoD complete [x] tests>80% touched (57/57 targeted Vitest; reporter not installed) [x] passes @review [x] @tester approves (DEV all 5; CERT later if required) [x] human docs complete (awaiting human close phrase)

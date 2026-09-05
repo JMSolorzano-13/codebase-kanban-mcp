@@ -1,14 +1,15 @@
 /**
- * @sdd-task: Task #5 - Dashboard Reindex + i18n + remaining Gherkin
- * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
- * @sdd-decision: SDD-ADR-015 - Reindex POSTs {root_path, project}; 202 stays home
- * @sdd-why: US-002/007 Gherkin — Reindex happy, custom name, 500 stays on Dashboard
- * @human-debug: If Reindex navigates → onSelectProject; if POST has project_name → body builder wrong
+ * @sdd-task: Task #2 - Surface Gherkin: local text, raw ISO dateTime/title
+ * @sdd-spec: specs/spec-007-n6p-last-indexed-local/spec.md
+ * @sdd-decision: SDD-ADR-034 - indexed_at visible text uses runtime TZ; dateTime/title stay ISO
+ * @sdd-why: US-002/005/006 — list + conflict <time> text equals helper; dateTime/title stay raw
+ * @human-debug: If text !== formatIndexedAt → surface bypassed helper; if dateTime !== ISO → title/dateTime rewritten
  */
 /* @vitest-environment jsdom */
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatIndexedAt } from "../lib/formatIndexedAt";
 import { messages } from "../lib/i18n";
 import { Dashboard } from "./Dashboard";
 
@@ -89,7 +90,7 @@ describe("Dashboard list + Control", () => {
   });
 
   it("renders two projects with identity and freshness only", async () => {
-    const fetchMock = mockDashboardFetch((url, init) => {
+    const fetchMock = mockDashboardFetch((url) => {
       if (url === "/rpc") return okRpc(twoProjects());
       return undefined;
     });
@@ -101,16 +102,19 @@ describe("Dashboard list + Control", () => {
     expect(screen.getByText("beta")).toBeInTheDocument();
     expect(screen.getByText("/tmp/beta")).toBeInTheDocument();
 
-    const alphaTime = document.querySelector('time[datetime="2026-08-29T10:00:00Z"]');
-    const betaTime = document.querySelector('time[datetime="2026-08-29T11:30:00Z"]');
+    const alphaIso = "2026-08-29T10:00:00Z";
+    const betaIso = "2026-08-29T11:30:00Z";
+    const alphaTime = document.querySelector(`time[datetime="${alphaIso}"]`);
+    const betaTime = document.querySelector(`time[datetime="${betaIso}"]`);
     expect(alphaTime).toBeTruthy();
     expect(betaTime).toBeTruthy();
-    expect(alphaTime?.textContent).toContain("2026");
-    expect(alphaTime?.textContent).toContain("29");
-    expect(alphaTime?.textContent).not.toBe("2026-08-29T10:00:00Z");
-    expect(betaTime?.textContent).toContain("2026");
-    expect(betaTime?.textContent).toContain("29");
-    expect(betaTime?.textContent).not.toBe("2026-08-29T11:30:00Z");
+    expect(alphaTime).toHaveAttribute("dateTime", alphaIso);
+    expect(alphaTime).toHaveAttribute("title", alphaIso);
+    expect(alphaTime?.textContent).toBe(formatIndexedAt(alphaIso, "en"));
+    expect(betaTime).toHaveAttribute("dateTime", betaIso);
+    expect(betaTime).toHaveAttribute("title", betaIso);
+    expect(betaTime?.textContent).toBe(formatIndexedAt(betaIso, "en"));
+    expect(document.body.textContent).toContain("Last indexed");
 
     expect(screen.getAllByRole("button", { name: messages.en.projects.enter })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "Reindex" })).toHaveLength(2);
@@ -126,6 +130,23 @@ describe("Dashboard list + Control", () => {
 
     const schemaCalls = fetchMock.mock.calls.filter((call) => rpcToolName(call[1] as RequestInit | undefined) === "get_graph_schema");
     expect(schemaCalls).toHaveLength(0);
+  });
+
+  it("shows invalid indexed_at as raw on the list time", async () => {
+    mockDashboardFetch((url) => {
+      if (url === "/rpc") {
+        return okRpc({
+          projects: [{ name: "alpha", root_path: "/tmp/alpha", indexed_at: "not-a-date" }],
+        });
+      }
+      return undefined;
+    });
+    render(<Dashboard onSelectProject={() => {}} />);
+
+    expect(await screen.findByText("alpha")).toBeInTheDocument();
+    const time = document.querySelector('time[datetime="not-a-date"]');
+    expect(time).toHaveAttribute("dateTime", "not-a-date");
+    expect(time?.textContent).toBe("not-a-date");
   });
 
   it("shows empty CTA and Control when there are zero projects", async () => {
@@ -420,14 +441,16 @@ describe("Dashboard path conflict groups", () => {
     expect(within(region).getAllByRole("button", { name: "Reindex" })).toHaveLength(2);
     expect(within(region).getAllByText("/tmp/alpha")).toHaveLength(1);
 
-    const oldTime = region.querySelector('time[datetime="2026-08-28T10:00:00Z"]');
-    const newTime = region.querySelector('time[datetime="2026-08-29T10:00:00Z"]');
-    expect(oldTime?.textContent).toContain("2026");
-    expect(oldTime?.textContent).toContain("28");
-    expect(oldTime?.textContent).not.toBe("2026-08-28T10:00:00Z");
-    expect(newTime?.textContent).toContain("2026");
-    expect(newTime?.textContent).toContain("29");
-    expect(newTime?.textContent).not.toBe("2026-08-29T10:00:00Z");
+    const oldIso = "2026-08-28T10:00:00Z";
+    const newIso = "2026-08-29T10:00:00Z";
+    const oldTime = region.querySelector(`time[datetime="${oldIso}"]`);
+    const newTime = region.querySelector(`time[datetime="${newIso}"]`);
+    expect(oldTime).toHaveAttribute("dateTime", oldIso);
+    expect(oldTime).toHaveAttribute("title", oldIso);
+    expect(oldTime?.textContent).toBe(formatIndexedAt(oldIso, "en"));
+    expect(newTime).toHaveAttribute("dateTime", newIso);
+    expect(newTime).toHaveAttribute("title", newIso);
+    expect(newTime?.textContent).toBe(formatIndexedAt(newIso, "en"));
 
     fireEvent.click(within(region).getByRole("button", { name: messages.en.projects.enter }));
     expect(onSelectProject).toHaveBeenCalledTimes(1);

@@ -1,6 +1,8 @@
-# Contributing to codebase-memory-mcp
+# Contributing to codebase-kanban-mcp
 
 Contributions are welcome. This guide covers setup, testing, and PR guidelines.
+
+This repository is a fork of [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp). Open pull requests against [JMSolorzano-13/codebase-kanban-mcp](https://github.com/JMSolorzano-13/codebase-kanban-mcp).
 
 > **Important**: This project is a **pure C binary** (rewritten from Go in v0.5.0). Please submit C code, not Go. Go PRs may be ported but cannot be merged directly.
 
@@ -9,10 +11,10 @@ Contributions are welcome. This guide covers setup, testing, and PR guidelines.
 **Prerequisites**: C compiler (gcc or clang), make, zlib, Git. Optional: Node.js 22+ (for graph UI).
 
 ```bash
-git clone https://github.com/DeusData/codebase-memory-mcp.git
-cd codebase-memory-mcp
+git clone https://github.com/JMSolorzano-13/codebase-kanban-mcp.git
+cd codebase-kanban-mcp
 git config core.hooksPath scripts/hooks  # activates pre-commit security checks
-scripts/build.sh
+scripts/build.sh --with-ui
 ```
 
 macOS: `xcode-select --install` provides clang.
@@ -160,42 +162,12 @@ If you add a new `system()`, `popen()`, `fork()`, or network call, it must be ju
 
 ## Good First Issues
 
-Check [issues labeled `good first issue`](https://github.com/DeusData/codebase-memory-mcp/labels/good%20first%20issue) for beginner-friendly tasks with clear scope and guidance.
+Check [issues](https://github.com/JMSolorzano-13/codebase-kanban-mcp/issues) on this fork. Upstream beginner tasks live on [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp/labels/good%20first%20issue).
 
-## License and sign-off (DCO) — required on every commit
+## License
 
-All contributions are licensed under the project's MIT License
-(inbound = outbound). To make that explicit and permanent, this project
-uses the [Developer Certificate of Origin 1.1](DCO) — the same mechanism
-as the Linux kernel: **every commit must carry a `Signed-off-by` trailer
-matching the commit author.**
+All contributions are licensed under this repository's MIT License
+(inbound = outbound). GitHub Terms of Service §D.6 apply.
 
-```bash
-git commit -s             # adds: Signed-off-by: Your Name <you@example.com>
-```
-
-**Adding a `Signed-off-by` line to a commit constitutes your certification
-of the [Developer Certificate of Origin 1.1](DCO) — in full, all four
-clauses — for that contribution.** The sign-off must match the commit's
-author name and email (enforced by CI). In short: you certify that you
-wrote the change or otherwise have the right to submit it under the MIT
-license, and that you understand the contribution and your sign-off are
-public and permanent.
-
-(Independently of the DCO, submitting a contribution to this repository is
-also subject to GitHub's Terms of Service §D.6, under which contributions
-are licensed inbound = outbound — i.e., under this repository's MIT
-license.)
-
-Enforcement is strict and automated:
-
-- CI rejects every push and pull request containing an unsigned commit
-  (`scripts/check-dco.sh`).
-- Install the local hook so unsigned commits are rejected at commit time:
-
-```bash
-scripts/install-git-hooks.sh
-```
-
-Forgot to sign? `git commit --amend -s` fixes the last commit;
-`git rebase --signoff <base>` fixes a whole branch.
+This fork does not require a `Signed-off-by` trailer and does not run DCO CI.
+Upstream [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) still does.

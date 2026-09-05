@@ -57,7 +57,7 @@ export function Dashboard({ onSelectProject, onPathExists }: DashboardProps) {
         refresh();
         return;
       }
-      let message = t.projects.reindexError;
+      let message: string = t.projects.reindexError;
       try {
         const data = (await res.json()) as IndexErrorPayload;
         if (typeof data.error === "string" && data.error.length > 0) {

@@ -53,6 +53,24 @@ cbm_pipeline_t *cbm_pipeline_new(const char *repo_path, const char *db_path, cbm
  * When enabled, the pipeline writes a compressed artifact after indexing. */
 void cbm_pipeline_set_persistence(cbm_pipeline_t *p, bool enabled);
 
+/*
+ * @sdd-task: Task #2 - Pipeline hook + `.sdd-skill` skip
+ * @sdd-spec: specs/spec-004-j8k-adr-parse-on-reindex/spec.md
+ * @sdd-decision: SDD-ADR-019 fill after capture; intent flag not route
+ * @sdd-why: User-triggered persist splices trio; watcher jobs keep adr_fill false
+ * @human-debug: Markers on a watcher run mean the job args lacked adr_fill:false
+ * or handle_index_repository did not honor it; default new() is false
+ */
+void cbm_pipeline_set_adr_fill(cbm_pipeline_t *p, bool enabled);
+bool cbm_pipeline_get_adr_fill(const cbm_pipeline_t *p);
+
+/* After ADR capture: if adr_fill, replace *saved_adr with cbm_adr_fill_document.
+ * NULL / OOM / no `.sdd-skill` leaves *saved_adr unchanged. Never fails the job. */
+void cbm_pipeline_apply_adr_fill(cbm_pipeline_t *p, char **saved_adr);
+
+/* True when adr_fill would replace existing (or invent a first marked blob). */
+bool cbm_pipeline_adr_fill_would_change(cbm_pipeline_t *p, const char *existing);
+
 /* Free a pipeline and all its internal state. NULL-safe. */
 void cbm_pipeline_free(cbm_pipeline_t *p);
 

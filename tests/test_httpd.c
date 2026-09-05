@@ -23,8 +23,15 @@
 #include "test_helpers.h"
 #include "ui/httpd.h"
 #include "ui/http_server.h"
+#include "foundation/identity.h"
+#include "adr/adr_fill.h"
+#include "mcp/mcp.h"
+#include "pipeline/pipeline.h"
+#include "pipeline/pipeline_internal.h"
+#include <sqlite3.h>
 #include <store/store.h>
 #include <watcher/watcher.h>
+#include <ctype.h>
 
 #include <stdio.h>
 #include <stdatomic.h>
@@ -897,7 +904,7 @@ TEST(ui_server_routes_indexing_through_joinable_daemon_executor) {
     ASSERT_EQ(th_server_thread_start(&ts.tid, ts.srv), 0);
 
     char body[1024];
-    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project_name\":\"ui-project\"}", root);
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\"}", root);
     char request[1400];
     snprintf(request, sizeof(request),
              "POST /api/index HTTP/1.1\r\nContent-Type: application/json\r\n"
@@ -913,7 +920,7 @@ TEST(ui_server_routes_indexing_through_joinable_daemon_executor) {
     ASSERT_EQ(th_status(response), 202);
     ASSERT_TRUE(called);
     ASSERT_STR_EQ(executor.root_path, root);
-    ASSERT_STR_EQ(executor.project_name, "ui-project");
+    ASSERT(executor.project_name[0] != '\0');
     th_cleanup(root);
     PASS();
 }
@@ -932,7 +939,7 @@ TEST(ui_server_free_never_joins_active_index_worker) {
     ASSERT_EQ(th_server_thread_start(&ts.tid, ts.srv), 0);
 
     char body[1024];
-    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project_name\":\"blocked\"}", root);
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\"}", root);
     char request[1400];
     snprintf(request, sizeof(request),
              "POST /api/index HTTP/1.1\r\nContent-Type: application/json\r\n"
@@ -2207,8 +2214,7 @@ TEST(ui_server_index_status_long_paths_no_overflow) {
         int port = cbm_http_server_port(ts.srv);
         for (int j = 0; j < MAX_TEST_INDEX_JOBS; j++) {
             char body[1200];
-            snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project_name\":\"p%d\"}", deep[j],
-                     j);
+            snprintf(body, sizeof(body), "{\"root_path\":\"%s\"}", deep[j]);
             char request[1500];
             snprintf(request, sizeof(request),
                      "POST /api/index HTTP/1.1\r\nContent-Type: application/json\r\n"
@@ -2254,6 +2260,3705 @@ TEST(ui_server_index_status_long_paths_no_overflow) {
 #endif
 }
 
+static void http_restore_cache(char *saved) {
+    if (saved) {
+        (void)cbm_setenv("CBM_CACHE_DIR", saved, 1);
+        free(saved);
+    } else {
+        (void)cbm_unsetenv("CBM_CACHE_DIR");
+    }
+}
+
+static bool http_write_project_db(const char *cache, const char *name, const char *root,
+                                  const char *indexed_at) {
+    char path[CBM_SZ_2K];
+    cbm_store_t *st;
+    bool ok;
+    snprintf(path, sizeof(path), "%s/%s.db", cache, name);
+    st = cbm_store_open_path(path);
+    if (!st) {
+        return false;
+    }
+    ok = cbm_store_upsert_project(st, name, root) == CBM_STORE_OK;
+    if (ok && indexed_at && indexed_at[0]) {
+        char sql[CBM_SZ_512];
+        snprintf(sql, sizeof(sql), "UPDATE projects SET indexed_at='%s' WHERE name='%s';",
+                 indexed_at, name);
+        ok = sqlite3_exec(cbm_store_get_db(st), sql, NULL, NULL, NULL) == SQLITE_OK;
+    }
+    cbm_store_close(st);
+    return ok;
+}
+
+static int http_post_index(int port, const char *body, char *response, size_t response_sz) {
+    char request[1600];
+    snprintf(request, sizeof(request),
+             "POST /api/index HTTP/1.1\r\nContent-Type: application/json\r\n"
+             "Content-Length: %zu\r\n\r\n%s",
+             strlen(body), body);
+    return th_http(port, request, response, response_sz);
+}
+
+/**
+ * @sdd-task: Task #3 - HTTP + MCP + watcher Gherkin
+ * @sdd-spec: specs/spec-004-j8k-adr-parse-on-reindex/spec.md
+ * @sdd-decision: SDD-ADR-019 user-triggered fill; SDD-ADR-020 body 32768
+ * @sdd-why: POST /api/index create/reindex must fill the same store GET /api/adr reads
+ * @human-debug: Job stays indexing → executor/index_repository failed; see last_resp
+ */
+typedef struct {
+    atomic_int calls;
+    atomic_int rc;
+    char last_resp[2048];
+} th_ui_real_index_executor_t;
+
+static int th_ui_real_index_executor(void *opaque, const char *root_path,
+                                     const char *project_name) {
+    th_ui_real_index_executor_t *ex = opaque;
+    cbm_mcp_server_t *srv;
+    char args[CBM_SZ_2K];
+    char *resp;
+    int ok;
+
+    srv = cbm_mcp_server_new(NULL);
+    if (!srv || !root_path) {
+        if (ex)
+            atomic_store(&ex->rc, -1);
+        if (srv)
+            cbm_mcp_server_free(srv);
+        return -1;
+    }
+    snprintf(args, sizeof(args), "{\"repo_path\":\"%s\",\"name\":\"%s\",\"mode\":\"fast\"}",
+             root_path, project_name ? project_name : "");
+    resp = cbm_mcp_handle_tool(srv, "index_repository", args);
+    ok = resp && strstr(resp, "\"status\":\"indexed\"") != NULL;
+    if (ex) {
+        atomic_fetch_add(&ex->calls, 1);
+        if (resp)
+            snprintf(ex->last_resp, sizeof(ex->last_resp), "%s", resp);
+        atomic_store(&ex->rc, ok ? 0 : -1);
+    }
+    free(resp);
+    cbm_mcp_server_free(srv);
+    return ok ? 0 : -1;
+}
+
+static int ui_adr_fill_tree(const char *root, const char *purpose, const char *stack,
+                            const char *decisions, const char *devlog) {
+    if (th_write_file(TH_PATH(root, "main.py"), "def main():\n    return 1\n") != 0)
+        return -1;
+    if (purpose && th_write_file(TH_PATH(root, ".sdd-skill/context_ai.md"), purpose) != 0)
+        return -1;
+    if (stack && th_write_file(TH_PATH(root, ".sdd-skill/baseline/TECH_STACK.md"), stack) != 0)
+        return -1;
+    if (decisions &&
+        th_write_file(TH_PATH(root, ".sdd-skill/baseline/ARCHITECTURE_ADR.md"), decisions) != 0)
+        return -1;
+    if (devlog && th_write_file(TH_PATH(root, ".sdd-skill/baseline/DEV_LOG.md"), devlog) != 0)
+        return -1;
+    return 0;
+}
+
+static void ui_make_unreadable(const char *path) {
+#ifndef _WIN32
+    if (chmod(path, 0) == 0) {
+        FILE *f = fopen(path, "rb");
+        if (!f)
+            return;
+        fclose(f);
+        (void)chmod(path, 0644);
+    }
+#endif
+    (void)cbm_unlink(path);
+    (void)th_mkdir_p(path);
+}
+
+static int http_seed_adr(const char *cache, const char *project, const char *content) {
+    char path[CBM_SZ_2K];
+    cbm_store_t *store;
+    int rc;
+
+    snprintf(path, sizeof(path), "%s/%s.db", cache, project);
+    store = cbm_store_open_path(path);
+    if (!store)
+        return -1;
+    rc = cbm_store_adr_store(store, project, content);
+    cbm_store_close(store);
+    return rc;
+}
+
+static char *http_adr_load(const char *cache, const char *project) {
+    char path[CBM_SZ_2K];
+    cbm_store_t *store;
+    cbm_adr_t adr;
+    char *out = NULL;
+
+    snprintf(path, sizeof(path), "%s/%s.db", cache, project);
+    store = cbm_store_open_path_query(path);
+    if (!store)
+        return NULL;
+    memset(&adr, 0, sizeof(adr));
+    if (cbm_store_adr_get(store, project, &adr) == CBM_STORE_OK && adr.content)
+        out = strdup(adr.content);
+    if (adr.content)
+        cbm_store_adr_free(&adr);
+    cbm_store_close(store);
+    return out;
+}
+
+static char *http_between(const char *doc, const char *start_m, const char *end_m) {
+    const char *s;
+    const char *e;
+    size_t n;
+    char *out;
+
+    if (!doc)
+        return NULL;
+    s = strstr(doc, start_m);
+    if (!s)
+        return NULL;
+    s += strlen(start_m);
+    e = strstr(s, end_m);
+    if (!e)
+        return NULL;
+    n = (size_t)(e - s);
+    out = malloc(n + 1);
+    if (!out)
+        return NULL;
+    memcpy(out, s, n);
+    out[n] = '\0';
+    return out;
+}
+
+static bool http_ws_only(const char *s) {
+    if (!s)
+        return true;
+    while (*s) {
+        if (!isspace((unsigned char)*s))
+            return false;
+        s++;
+    }
+    return true;
+}
+
+static int ui_adr_fill_server_start(th_server_t *ts, th_ui_real_index_executor_t *exec) {
+    memset(exec, 0, sizeof(*exec));
+    atomic_init(&exec->calls, 0);
+    atomic_init(&exec->rc, 0);
+    ts->srv = cbm_http_server_new(0);
+    if (!ts->srv)
+        return -1;
+    cbm_http_server_set_index_executor(ts->srv, th_ui_real_index_executor, exec);
+    if (th_server_thread_start(&ts->tid, ts->srv) != 0) {
+        (void)cbm_http_server_free(ts->srv);
+        ts->srv = NULL;
+        return -1;
+    }
+    return 0;
+}
+
+static int http_wait_index_done(int port, uint32_t timeout_ms) {
+    uint64_t deadline = cbm_now_ms() + timeout_ms;
+    char resp[8192];
+
+    while (cbm_now_ms() < deadline) {
+        if (th_http(port, "GET /api/index-status HTTP/1.1\r\n\r\n", resp, sizeof(resp)) > 0 &&
+            th_status(resp) == 200) {
+            if (strstr(resp, "\"status\":\"done\""))
+                return 2;
+            if (strstr(resp, "\"status\":\"error\""))
+                return 3;
+        }
+        cbm_usleep(10000);
+    }
+    return -1;
+}
+
+static char *http_json_escape(const char *s) {
+    size_t n = 0;
+    size_t i;
+    char *out;
+    char *p;
+
+    if (!s)
+        s = "";
+    for (i = 0; s[i]; i++) {
+        char ch = s[i];
+        if (ch == '"' || ch == '\\' || ch == '\n' || ch == '\r' || ch == '\t')
+            n += 2;
+        else
+            n++;
+    }
+    out = malloc(n + 1);
+    if (!out)
+        return NULL;
+    p = out;
+    for (i = 0; s[i]; i++) {
+        char ch = s[i];
+        if (ch == '"') {
+            *p++ = '\\';
+            *p++ = '"';
+        } else if (ch == '\\') {
+            *p++ = '\\';
+            *p++ = '\\';
+        } else if (ch == '\n') {
+            *p++ = '\\';
+            *p++ = 'n';
+        } else if (ch == '\r') {
+            *p++ = '\\';
+            *p++ = 'r';
+        } else if (ch == '\t') {
+            *p++ = '\\';
+            *p++ = 't';
+        } else {
+            *p++ = ch;
+        }
+    }
+    *p = '\0';
+    return out;
+}
+
+static int ui_adr_post_escaped(th_server_t *ts, const char *project, const char *content,
+                               char *resp, size_t respsz) {
+    char *esc;
+    char *body;
+    char *req;
+    size_t body_cap;
+    size_t req_cap;
+    int body_len;
+    int n;
+
+    esc = http_json_escape(content);
+    if (!esc)
+        return 0;
+    body_cap = strlen(esc) + strlen(project) + 64;
+    body = malloc(body_cap);
+    if (!body) {
+        free(esc);
+        return 0;
+    }
+    body_len = snprintf(body, body_cap, "{\"project\":\"%s\",\"content\":\"%s\"}", project, esc);
+    free(esc);
+    if (body_len < 0 || (size_t)body_len >= body_cap) {
+        free(body);
+        return 0;
+    }
+    req_cap = (size_t)body_len + 256;
+    req = malloc(req_cap);
+    if (!req) {
+        free(body);
+        return 0;
+    }
+    snprintf(req, req_cap,
+             "POST /api/adr HTTP/1.1\r\nContent-Type: application/json\r\n"
+             "Content-Length: %d\r\n\r\n%s",
+             body_len, body);
+    n = th_http(cbm_http_server_port(ts->srv), req, resp, respsz);
+    free(req);
+    free(body);
+    return n;
+}
+
+static char *http_manage_adr_get(const char *project) {
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    char args[256];
+    char *resp;
+
+    if (!srv)
+        return NULL;
+    snprintf(args, sizeof(args), "{\"project\":\"%s\",\"mode\":\"get\"}", project);
+    resp = cbm_mcp_handle_tool(srv, "manage_adr", args);
+    cbm_mcp_server_free(srv);
+    return resp;
+}
+
+TEST(ui_index_owned_path_is_409_path_exists) {
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_owned");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_index_executor_t executor = {0};
+    th_server_t ts;
+    char body[1024];
+    char response[4096];
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-ownedc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT(http_write_project_db(cache, "alpha", root, "2026-08-29T10:00:00Z"));
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+
+    atomic_init(&executor.calls, 0);
+    ts.srv = cbm_http_server_new(0);
+    ASSERT_NOT_NULL(ts.srv);
+    cbm_http_server_set_index_executor(ts.srv, th_ui_index_executor, &executor);
+    ASSERT_EQ(th_server_thread_start(&ts.tid, ts.srv), 0);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\"}", root);
+    ASSERT_GT(http_post_index(cbm_http_server_port(ts.srv), body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 409);
+    ASSERT_NOT_NULL(strstr(response, "path_exists"));
+    ASSERT_NOT_NULL(strstr(response, "alpha"));
+    ASSERT_EQ(atomic_load(&executor.calls), 0);
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_index_trailing_slash_is_409_path_exists) {
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_slash");
+    char slashed[300];
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_index_executor_t executor = {0};
+    th_server_t ts;
+    char body[1024];
+    char response[4096];
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-slashc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    snprintf(slashed, sizeof(slashed), "%s/", root);
+    ASSERT(http_write_project_db(cache, "alpha", root, "2026-08-29T10:00:00Z"));
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+
+    atomic_init(&executor.calls, 0);
+    ts.srv = cbm_http_server_new(0);
+    ASSERT_NOT_NULL(ts.srv);
+    cbm_http_server_set_index_executor(ts.srv, th_ui_index_executor, &executor);
+    ASSERT_EQ(th_server_thread_start(&ts.tid, ts.srv), 0);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\"}", slashed);
+    ASSERT_GT(http_post_index(cbm_http_server_port(ts.srv), body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 409);
+    ASSERT_NOT_NULL(strstr(response, "path_exists"));
+    ASSERT_EQ(atomic_load(&executor.calls), 0);
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_index_derived_name_other_path_is_409_name_exists) {
+    char cache[256];
+    char owned[256];
+    char request[256];
+    char *derived;
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_index_executor_t executor = {0};
+    th_server_t ts;
+    char body[1024];
+    char response[4096];
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-nmc-XXXXXX");
+    snprintf(owned, sizeof(owned), "/tmp/cbm-http-nmo-XXXXXX");
+    snprintf(request, sizeof(request), "/tmp/cbm-http-nmr-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT(cbm_mkdtemp(owned) != NULL);
+    ASSERT(cbm_mkdtemp(request) != NULL);
+    derived = cbm_project_name_from_path(request);
+    ASSERT(http_write_project_db(cache, derived, owned, "2026-08-29T10:00:00Z"));
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+
+    atomic_init(&executor.calls, 0);
+    ts.srv = cbm_http_server_new(0);
+    ASSERT_NOT_NULL(ts.srv);
+    cbm_http_server_set_index_executor(ts.srv, th_ui_index_executor, &executor);
+    ASSERT_EQ(th_server_thread_start(&ts.tid, ts.srv), 0);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\"}", request);
+    ASSERT_GT(http_post_index(cbm_http_server_port(ts.srv), body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 409);
+    ASSERT_NOT_NULL(strstr(response, "name_exists"));
+    ASSERT_NOT_NULL(strstr(response, derived));
+    ASSERT_EQ(atomic_load(&executor.calls), 0);
+
+    free(derived);
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(owned);
+    th_cleanup(request);
+    PASS();
+}
+
+TEST(ui_index_reindex_project_is_202) {
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_rx");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_index_executor_t executor = {0};
+    th_server_t ts;
+    char body[1024];
+    char response[4096];
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-rxc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT(http_write_project_db(cache, "custom", root, "2026-08-29T10:00:00Z"));
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+
+    atomic_init(&executor.calls, 0);
+    ts.srv = cbm_http_server_new(0);
+    ASSERT_NOT_NULL(ts.srv);
+    cbm_http_server_set_index_executor(ts.srv, th_ui_index_executor, &executor);
+    ASSERT_EQ(th_server_thread_start(&ts.tid, ts.srv), 0);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project\":\"custom\"}", root);
+    ASSERT_GT(http_post_index(cbm_http_server_port(ts.srv), body, response, sizeof(response)), 0);
+    bool called = th_wait_atomic_int(&executor.calls, 1, 2000);
+    ASSERT_EQ(th_status(response), 202);
+    ASSERT_TRUE(called);
+    ASSERT_STR_EQ(executor.project_name, "custom");
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_index_reindex_project_name_alias_is_202) {
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_pna");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_index_executor_t executor = {0};
+    th_server_t ts;
+    char body[1024];
+    char response[4096];
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-pnac-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT(http_write_project_db(cache, "custom", root, "2026-08-29T10:00:00Z"));
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+
+    atomic_init(&executor.calls, 0);
+    ts.srv = cbm_http_server_new(0);
+    ASSERT_NOT_NULL(ts.srv);
+    cbm_http_server_set_index_executor(ts.srv, th_ui_index_executor, &executor);
+    ASSERT_EQ(th_server_thread_start(&ts.tid, ts.srv), 0);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project_name\":\"custom\"}", root);
+    ASSERT_GT(http_post_index(cbm_http_server_port(ts.srv), body, response, sizeof(response)), 0);
+    bool called = th_wait_atomic_int(&executor.calls, 1, 2000);
+    ASSERT_EQ(th_status(response), 202);
+    ASSERT_TRUE(called);
+    ASSERT_STR_EQ(executor.project_name, "custom");
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_index_tie_existing_project_is_greater_name) {
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_tie");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_index_executor_t executor = {0};
+    th_server_t ts;
+    char body[1024];
+    char response[4096];
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-tiec-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT(http_write_project_db(cache, "alpha", root, "2026-08-29T10:00:00Z"));
+    ASSERT(http_write_project_db(cache, "beta", root, "2026-08-29T10:00:00Z"));
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+
+    atomic_init(&executor.calls, 0);
+    ts.srv = cbm_http_server_new(0);
+    ASSERT_NOT_NULL(ts.srv);
+    cbm_http_server_set_index_executor(ts.srv, th_ui_index_executor, &executor);
+    ASSERT_EQ(th_server_thread_start(&ts.tid, ts.srv), 0);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\"}", root);
+    ASSERT_GT(http_post_index(cbm_http_server_port(ts.srv), body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 409);
+    ASSERT_NOT_NULL(strstr(response, "path_exists"));
+    ASSERT_NOT_NULL(strstr(response, "\"existing_project\":\"beta\""));
+    ASSERT_EQ(atomic_load(&executor.calls), 0);
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_index_inflight_second_create_is_409) {
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_if");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_blocking_index_executor_t executor = {0};
+    th_server_t ts;
+    char body[1024];
+    char first[4096];
+    char second[4096];
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-ifc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+
+    atomic_init(&executor.calls, 0);
+    atomic_init(&executor.release, 0);
+    ts.srv = cbm_http_server_new(0);
+    ASSERT_NOT_NULL(ts.srv);
+    cbm_http_server_set_index_executor(ts.srv, th_ui_blocking_index_executor, &executor);
+    ASSERT_EQ(th_server_thread_start(&ts.tid, ts.srv), 0);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\"}", root);
+    ASSERT_GT(http_post_index(cbm_http_server_port(ts.srv), body, first, sizeof(first)), 0);
+    ASSERT_EQ(th_status(first), 202);
+    ASSERT_TRUE(th_wait_atomic_int(&executor.calls, 1, 2000));
+
+    ASSERT_GT(http_post_index(cbm_http_server_port(ts.srv), body, second, sizeof(second)), 0);
+    ASSERT_EQ(th_status(second), 409);
+    ASSERT_NOT_NULL(strstr(second, "path_exists"));
+    ASSERT_EQ(atomic_load(&executor.calls), 1);
+
+    atomic_store(&executor.release, 1);
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_index_reindex_fills_adr_and_migrates_unmarked) {
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_adr_rx");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_real_index_executor_t exec;
+    th_server_t ts;
+    char body[1024];
+    char response[8192];
+    char *stored;
+    char *manual;
+    char *mcp_get;
+    int port;
+    int job;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-adr-rxc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT_EQ(ui_adr_fill_tree(root, "PURPOSE-ALPHA-GRAPH\n", "STACK-ALPHA-C11\n",
+                               "DECISION-ALPHA-PATH\n", "SECRET-DEVLOG-ALPHA\n"),
+              0);
+    ASSERT(http_write_project_db(cache, "alpha", root, "2026-08-30T10:00:00Z"));
+    ASSERT_EQ(http_seed_adr(cache, "alpha", "# Existing ADR\n"), CBM_STORE_OK);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(ui_adr_fill_server_start(&ts, &exec), 0);
+    port = cbm_http_server_port(ts.srv);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project\":\"alpha\"}", root);
+    ASSERT_GT(http_post_index(port, body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 202);
+    job = http_wait_index_done(port, 30000);
+    ASSERT_EQ(job, 2);
+
+    ASSERT_GT(ui_adr_get_request(&ts, "alpha", response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+    ASSERT_NOT_NULL(strstr(response, CBM_ADR_GENERATED_START));
+    ASSERT_NOT_NULL(strstr(response, CBM_ADR_GENERATED_END));
+    ASSERT_NOT_NULL(strstr(response, CBM_ADR_MANUAL_START));
+    ASSERT_NOT_NULL(strstr(response, "PURPOSE-ALPHA-GRAPH"));
+    ASSERT_NOT_NULL(strstr(response, "STACK-ALPHA-C11"));
+    ASSERT_NOT_NULL(strstr(response, "DECISION-ALPHA-PATH"));
+    ASSERT_NULL(strstr(response, "SECRET-DEVLOG-ALPHA"));
+
+    stored = http_adr_load(cache, "alpha");
+    ASSERT_NOT_NULL(stored);
+    manual = http_between(stored, CBM_ADR_MANUAL_START, CBM_ADR_MANUAL_END);
+    ASSERT_NOT_NULL(manual);
+    ASSERT_NOT_NULL(strstr(manual, "# Existing ADR"));
+    free(manual);
+    free(stored);
+
+    mcp_get = http_manage_adr_get("alpha");
+    ASSERT_NOT_NULL(mcp_get);
+    ASSERT_NOT_NULL(strstr(mcp_get, CBM_ADR_GENERATED_START));
+    ASSERT_NOT_NULL(strstr(mcp_get, "PURPOSE-ALPHA-GRAPH"));
+    ASSERT_NULL(strstr(mcp_get, "SECRET-DEVLOG-ALPHA"));
+    free(mcp_get);
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_index_create_fills_generated_empty_manual) {
+    char cache[256];
+    char *tmp = th_mktempdir("cbm_http_adr_new");
+    char root[512];
+    char *project;
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_real_index_executor_t exec;
+    th_server_t ts;
+    char body[1024];
+    char response[8192];
+    char *stored;
+    char *manual;
+    int port;
+    int job;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-adr-newc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(tmp);
+    snprintf(root, sizeof(root), "%s/beta", tmp);
+    ASSERT_EQ(th_mkdir_p(root), 0);
+    ASSERT_EQ(ui_adr_fill_tree(root, "PURPOSE-BETA-NEW\n", "STACK-BETA-NEW\n",
+                               "DECISION-BETA-NEW\n", NULL),
+              0);
+    project = cbm_project_name_from_path(root);
+    ASSERT_NOT_NULL(project);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(ui_adr_fill_server_start(&ts, &exec), 0);
+    port = cbm_http_server_port(ts.srv);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\"}", root);
+    ASSERT_GT(http_post_index(port, body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 202);
+    job = http_wait_index_done(port, 30000);
+    ASSERT_EQ(job, 2);
+
+    ASSERT_GT(ui_adr_get_request(&ts, project, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+    ASSERT_NOT_NULL(strstr(response, CBM_ADR_GENERATED_START));
+    ASSERT_NOT_NULL(strstr(response, "PURPOSE-BETA-NEW"));
+    ASSERT_NOT_NULL(strstr(response, "STACK-BETA-NEW"));
+    ASSERT_NOT_NULL(strstr(response, "DECISION-BETA-NEW"));
+
+    stored = http_adr_load(cache, project);
+    ASSERT_NOT_NULL(stored);
+    manual = http_between(stored, CBM_ADR_MANUAL_START, CBM_ADR_MANUAL_END);
+    ASSERT_NOT_NULL(manual);
+    ASSERT_TRUE(http_ws_only(manual));
+    free(manual);
+    free(stored);
+    free(project);
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(tmp);
+    PASS();
+}
+
+TEST(ui_index_no_sdd_skill_leaves_adr_unmarked) {
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_adr_gamma");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_real_index_executor_t exec;
+    th_server_t ts;
+    char body[1024];
+    char response[8192];
+    char *stored;
+    int port;
+    int job;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-adr-gammac-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT_EQ(th_write_file(TH_PATH(root, "main.py"), "def main():\n    return 1\n"), 0);
+    ASSERT(http_write_project_db(cache, "gamma", root, "2026-08-30T10:00:00Z"));
+    ASSERT_EQ(http_seed_adr(cache, "gamma", "# Hand only\n"), CBM_STORE_OK);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(ui_adr_fill_server_start(&ts, &exec), 0);
+    port = cbm_http_server_port(ts.srv);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project\":\"gamma\"}", root);
+    ASSERT_GT(http_post_index(port, body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 202);
+    job = http_wait_index_done(port, 30000);
+    ASSERT_EQ(job, 2);
+
+    ASSERT_GT(ui_adr_get_request(&ts, "gamma", response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+    ASSERT_NULL(strstr(response, "CBM-GENERATED"));
+    stored = http_adr_load(cache, "gamma");
+    ASSERT_NOT_NULL(stored);
+    ASSERT_STR_EQ(stored, "# Hand only\n");
+    free(stored);
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_index_partial_context_ai_job_succeeds) {
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_adr_part");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_real_index_executor_t exec;
+    th_server_t ts;
+    char body[1024];
+    char response[8192];
+    int port;
+    int job;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-adr-partc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT_EQ(ui_adr_fill_tree(root, "PURPOSE-PARTIAL-ONLY\n", NULL, NULL, NULL), 0);
+    ASSERT(http_write_project_db(cache, "alpha", root, "2026-08-30T10:00:00Z"));
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(ui_adr_fill_server_start(&ts, &exec), 0);
+    port = cbm_http_server_port(ts.srv);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project\":\"alpha\"}", root);
+    ASSERT_GT(http_post_index(port, body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 202);
+    job = http_wait_index_done(port, 30000);
+    ASSERT_EQ(job, 2);
+
+    ASSERT_GT(ui_adr_get_request(&ts, "alpha", response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+    ASSERT_NOT_NULL(strstr(response, "PURPOSE-PARTIAL-ONLY"));
+    ASSERT_NOT_NULL(strstr(response, CBM_ADR_GENERATED_START));
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_index_unreadable_architecture_omits_extract) {
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_adr_unr");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_real_index_executor_t exec;
+    th_server_t ts;
+    char body[1024];
+    char response[8192];
+    int port;
+    int job;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-adr-unrc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT_EQ(ui_adr_fill_tree(root, "PURPOSE-READABLE\n", "STACK-READABLE\n",
+                               "DECISION-UNREADABLE-FULL-COPY\n", NULL),
+              0);
+    ui_make_unreadable(TH_PATH(root, ".sdd-skill/baseline/ARCHITECTURE_ADR.md"));
+    ASSERT(http_write_project_db(cache, "alpha", root, "2026-08-30T10:00:00Z"));
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(ui_adr_fill_server_start(&ts, &exec), 0);
+    port = cbm_http_server_port(ts.srv);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project\":\"alpha\"}", root);
+    ASSERT_GT(http_post_index(port, body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 202);
+    job = http_wait_index_done(port, 30000);
+    ASSERT_EQ(job, 2);
+
+    ASSERT_GT(ui_adr_get_request(&ts, "alpha", response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+    ASSERT_NOT_NULL(strstr(response, "PURPOSE-READABLE"));
+    ASSERT_NOT_NULL(strstr(response, "STACK-READABLE"));
+    ASSERT_NULL(strstr(response, "DECISION-UNREADABLE-FULL-COPY"));
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_adr_generated_hand_edit_replaced_on_reindex) {
+    static const char *hand =
+        "<!-- CBM-GENERATED-START -->\n# Purpose\nPURPOSE-HAND-EDIT\n"
+        "<!-- CBM-GENERATED-END -->\n<!-- CBM-MANUAL-START -->\n# notes\n"
+        "<!-- CBM-MANUAL-END -->\n";
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_adr_canon");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_real_index_executor_t exec;
+    th_server_t ts;
+    char body[1024];
+    char response[8192];
+    int port;
+    int job;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-adr-canon-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT_EQ(ui_adr_fill_tree(root, "PURPOSE-CANONICAL\n", "STACK-CANON\n", "DECISION-CANON\n",
+                               NULL),
+              0);
+    ASSERT(http_write_project_db(cache, "alpha", root, "2026-08-30T10:00:00Z"));
+    ASSERT_EQ(http_seed_adr(cache, "alpha", hand), CBM_STORE_OK);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(ui_adr_fill_server_start(&ts, &exec), 0);
+    port = cbm_http_server_port(ts.srv);
+
+    ASSERT_GT(ui_adr_post_escaped(&ts, "alpha", hand, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project\":\"alpha\"}", root);
+    ASSERT_GT(http_post_index(port, body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 202);
+    job = http_wait_index_done(port, 30000);
+    ASSERT_EQ(job, 2);
+
+    ASSERT_GT(ui_adr_get_request(&ts, "alpha", response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+    ASSERT_NOT_NULL(strstr(response, "PURPOSE-CANONICAL"));
+    ASSERT_NULL(strstr(response, "PURPOSE-HAND-EDIT"));
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_adr_post_body_max_32768) {
+    enum { CONTENT_16K = CBM_SZ_16K };
+    char cache[256];
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_server_t ts;
+    char *content;
+    char resp[4096];
+    char *over;
+    char *req;
+    size_t over_len = (size_t)CBM_SZ_32K + 1;
+    size_t req_cap;
+    int i;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-adr-cap-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+    content = malloc(CONTENT_16K + 1);
+    ASSERT_NOT_NULL(content);
+    memcpy(content, CBM_ADR_GENERATED_START, strlen(CBM_ADR_GENERATED_START));
+    for (i = (int)strlen(CBM_ADR_GENERATED_START); i < CONTENT_16K; i++)
+        content[i] = (char)('A' + (i % 26));
+    content[CONTENT_16K] = '\0';
+    ASSERT_GT(ui_adr_post_escaped(&ts, "adr-cap", content, resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    ASSERT_NOT_NULL(strstr(resp, "{\"saved\":true}"));
+    free(content);
+
+    over = malloc(over_len + 1);
+    ASSERT_NOT_NULL(over);
+    memset(over, 'x', over_len);
+    over[over_len] = '\0';
+    req_cap = over_len + 256;
+    req = malloc(req_cap);
+    ASSERT_NOT_NULL(req);
+    snprintf(req, req_cap,
+             "POST /api/adr HTTP/1.1\r\nContent-Type: application/json\r\n"
+             "Content-Length: %zu\r\n\r\n%s",
+             over_len, over);
+    ASSERT_GT(th_http(cbm_http_server_port(ts.srv), req, resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 400);
+    ASSERT_NOT_NULL(strstr(resp, "invalid body"));
+    free(req);
+    free(over);
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    PASS();
+}
+
+/**
+ * @sdd-task: Task #2 - HTTP + MCP + watcher Gherkin
+ * @sdd-spec: specs/spec-013-r9w-adr-fill-gamedev-trio/spec.md
+ * @sdd-decision: SDD-ADR-058 XOR; SDD-ADR-060 NULL=neither dir
+ * @sdd-why: Job Gherkin: gamedev XOR fill on POST /api/index; leftover sdd omitted
+ * @human-debug: Dual-tree leftover PURPOSE-SDD-* in GET /api/adr → XOR lost or a spec-004
+ * fixture grew .gamedev/. Empty .gamedev/ with leftover sdd extract → presence treated as missing
+ */
+static int ui_adr_fill_gamedev_tree(const char *root, const char *purpose, const char *stack,
+                                    const char *decisions, const char *gdd) {
+    if (th_write_file(TH_PATH(root, "main.py"), "def main():\n    return 1\n") != 0)
+        return -1;
+    if (th_mkdir_p(TH_PATH(root, ".gamedev")) != 0)
+        return -1;
+    if (purpose && th_write_file(TH_PATH(root, ".gamedev/game_context.md"), purpose) != 0)
+        return -1;
+    if (stack && th_write_file(TH_PATH(root, ".gamedev/baseline/TECH_STACK.md"), stack) != 0)
+        return -1;
+    if (decisions &&
+        th_write_file(TH_PATH(root, ".gamedev/baseline/ARCHITECTURE_ADR.md"), decisions) != 0)
+        return -1;
+    if (gdd &&
+        th_write_file(TH_PATH(root, ".gamedev/phases/01-preproduction/gdd.md"), gdd) != 0)
+        return -1;
+    return 0;
+}
+
+static int ui_adr_fill_leftover_sdd(const char *root, const char *purpose, const char *stack,
+                                    const char *decisions, const char *devlog) {
+    if (purpose && th_write_file(TH_PATH(root, ".sdd-skill/context_ai.md"), purpose) != 0)
+        return -1;
+    if (stack && th_write_file(TH_PATH(root, ".sdd-skill/baseline/TECH_STACK.md"), stack) != 0)
+        return -1;
+    if (decisions &&
+        th_write_file(TH_PATH(root, ".sdd-skill/baseline/ARCHITECTURE_ADR.md"), decisions) != 0)
+        return -1;
+    if (devlog && th_write_file(TH_PATH(root, ".sdd-skill/baseline/DEV_LOG.md"), devlog) != 0)
+        return -1;
+    return 0;
+}
+
+static char *ui_adr_slurp(const char *path) {
+    FILE *f = cbm_fopen(path, "rb");
+    long sz;
+    char *buf;
+    size_t n;
+
+    if (!f)
+        return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return NULL;
+    }
+    sz = ftell(f);
+    if (sz < 0) {
+        fclose(f);
+        return NULL;
+    }
+    rewind(f);
+    buf = malloc((size_t)sz + 1);
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
+    n = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[n] = '\0';
+    return buf;
+}
+
+TEST(ui_index_reindex_fills_gamedev_omits_leftover_sdd) {
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_gd_rx");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_real_index_executor_t exec;
+    th_server_t ts;
+    char body[1024];
+    char response[8192];
+    char purpose_path[512];
+    char stack_path[512];
+    char dec_path[512];
+    char *before_p;
+    char *before_s;
+    char *before_d;
+    char *after_p;
+    char *after_s;
+    char *after_d;
+    char *stored;
+    char *manual;
+    char *mcp_get;
+    int port;
+    int job;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-gd-rxc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT_EQ(ui_adr_fill_gamedev_tree(root, "PURPOSE-GAME-BEVY\n", "STACK-GAME-BEVY\n",
+                                       "DECISION-GAME-BEVY\n", "SECRET-GDD-BEVY\n"),
+              0);
+    ASSERT_EQ(ui_adr_fill_leftover_sdd(root, "PURPOSE-SDD-MVP1\n", "STACK-SDD-MVP1\n",
+                                       "DECISION-SDD-MVP1\n", "SECRET-DEVLOG-BEVY\n"),
+              0);
+    snprintf(purpose_path, sizeof(purpose_path), "%s",
+             TH_PATH(root, ".gamedev/game_context.md"));
+    snprintf(stack_path, sizeof(stack_path), "%s",
+             TH_PATH(root, ".gamedev/baseline/TECH_STACK.md"));
+    snprintf(dec_path, sizeof(dec_path), "%s",
+             TH_PATH(root, ".gamedev/baseline/ARCHITECTURE_ADR.md"));
+    before_p = ui_adr_slurp(purpose_path);
+    before_s = ui_adr_slurp(stack_path);
+    before_d = ui_adr_slurp(dec_path);
+    ASSERT_NOT_NULL(before_p);
+    ASSERT_NOT_NULL(before_s);
+    ASSERT_NOT_NULL(before_d);
+    ASSERT(http_write_project_db(cache, "bevy", root, "2026-08-31T10:00:00Z"));
+    ASSERT_EQ(http_seed_adr(cache, "bevy", "# Existing ADR\n"), CBM_STORE_OK);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(ui_adr_fill_server_start(&ts, &exec), 0);
+    port = cbm_http_server_port(ts.srv);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project\":\"bevy\"}", root);
+    ASSERT_GT(http_post_index(port, body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 202);
+    job = http_wait_index_done(port, 30000);
+    ASSERT_EQ(job, 2);
+
+    ASSERT_GT(ui_adr_get_request(&ts, "bevy", response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+    ASSERT_NOT_NULL(strstr(response, CBM_ADR_GENERATED_START));
+    ASSERT_NOT_NULL(strstr(response, CBM_ADR_GENERATED_END));
+    ASSERT_NOT_NULL(strstr(response, CBM_ADR_MANUAL_START));
+    ASSERT_NOT_NULL(strstr(response, "PURPOSE-GAME-BEVY"));
+    ASSERT_NOT_NULL(strstr(response, "STACK-GAME-BEVY"));
+    ASSERT_NOT_NULL(strstr(response, "DECISION-GAME-BEVY"));
+    ASSERT_NOT_NULL(strstr(response, "# Purpose"));
+    ASSERT_NOT_NULL(strstr(response, "# Stack"));
+    ASSERT_NOT_NULL(strstr(response, "# Decisions"));
+    ASSERT_NULL(strstr(response, "PURPOSE-SDD-MVP1"));
+    ASSERT_NULL(strstr(response, "STACK-SDD-MVP1"));
+    ASSERT_NULL(strstr(response, "DECISION-SDD-MVP1"));
+    ASSERT_NULL(strstr(response, "SECRET-GDD-BEVY"));
+    ASSERT_NULL(strstr(response, "SECRET-DEVLOG-BEVY"));
+
+    stored = http_adr_load(cache, "bevy");
+    ASSERT_NOT_NULL(stored);
+    manual = http_between(stored, CBM_ADR_MANUAL_START, CBM_ADR_MANUAL_END);
+    ASSERT_NOT_NULL(manual);
+    ASSERT_NOT_NULL(strstr(manual, "# Existing ADR"));
+    free(manual);
+    free(stored);
+
+    mcp_get = http_manage_adr_get("bevy");
+    ASSERT_NOT_NULL(mcp_get);
+    ASSERT_NOT_NULL(strstr(mcp_get, CBM_ADR_GENERATED_START));
+    ASSERT_NOT_NULL(strstr(mcp_get, "PURPOSE-GAME-BEVY"));
+    ASSERT_NULL(strstr(mcp_get, "PURPOSE-SDD-MVP1"));
+    free(mcp_get);
+
+    after_p = ui_adr_slurp(purpose_path);
+    after_s = ui_adr_slurp(stack_path);
+    after_d = ui_adr_slurp(dec_path);
+    ASSERT_NOT_NULL(after_p);
+    ASSERT_NOT_NULL(after_s);
+    ASSERT_NOT_NULL(after_d);
+    ASSERT_STR_EQ(after_p, before_p);
+    ASSERT_STR_EQ(after_s, before_s);
+    ASSERT_STR_EQ(after_d, before_d);
+    free(before_p);
+    free(before_s);
+    free(before_d);
+    free(after_p);
+    free(after_s);
+    free(after_d);
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_index_create_gamedev_fills_generated_empty_manual) {
+    char cache[256];
+    char *tmp = th_mktempdir("cbm_http_gd_new");
+    char root[512];
+    char *project;
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_real_index_executor_t exec;
+    th_server_t ts;
+    char body[1024];
+    char response[8192];
+    char *stored;
+    char *manual;
+    int port;
+    int job;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-gd-newc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(tmp);
+    snprintf(root, sizeof(root), "%s/gamma", tmp);
+    ASSERT_EQ(th_mkdir_p(root), 0);
+    ASSERT_EQ(ui_adr_fill_gamedev_tree(root, "PURPOSE-GAMMA-NEW\n", "STACK-GAMMA-NEW\n",
+                                       "DECISION-GAMMA-NEW\n", NULL),
+              0);
+    project = cbm_project_name_from_path(root);
+    ASSERT_NOT_NULL(project);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(ui_adr_fill_server_start(&ts, &exec), 0);
+    port = cbm_http_server_port(ts.srv);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\"}", root);
+    ASSERT_GT(http_post_index(port, body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 202);
+    job = http_wait_index_done(port, 30000);
+    ASSERT_EQ(job, 2);
+
+    ASSERT_GT(ui_adr_get_request(&ts, project, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+    ASSERT_NOT_NULL(strstr(response, CBM_ADR_GENERATED_START));
+    ASSERT_NOT_NULL(strstr(response, "PURPOSE-GAMMA-NEW"));
+    ASSERT_NOT_NULL(strstr(response, "STACK-GAMMA-NEW"));
+    ASSERT_NOT_NULL(strstr(response, "DECISION-GAMMA-NEW"));
+
+    stored = http_adr_load(cache, project);
+    ASSERT_NOT_NULL(stored);
+    manual = http_between(stored, CBM_ADR_MANUAL_START, CBM_ADR_MANUAL_END);
+    ASSERT_NOT_NULL(manual);
+    ASSERT_TRUE(http_ws_only(manual));
+    free(manual);
+    free(stored);
+    free(project);
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(tmp);
+    PASS();
+}
+
+TEST(ui_index_add_gamedev_overwrites_sdd_keeps_manual) {
+    static const char *former =
+        "<!-- CBM-GENERATED-START -->\n# Purpose\nPURPOSE-SDD-MVP1\n"
+        "<!-- CBM-GENERATED-END -->\n<!-- CBM-MANUAL-START -->\n# Keep notes\n"
+        "<!-- CBM-MANUAL-END -->\n";
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_gd_sw");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_real_index_executor_t exec;
+    th_server_t ts;
+    char body[1024];
+    char response[8192];
+    char *stored;
+    char *manual;
+    int port;
+    int job;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-gd-swc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT_EQ(th_write_file(TH_PATH(root, "main.py"), "def main():\n    return 1\n"), 0);
+    ASSERT_EQ(ui_adr_fill_leftover_sdd(root, "PURPOSE-SDD-MVP1\n", NULL, NULL, NULL), 0);
+    ASSERT(http_write_project_db(cache, "bevy", root, "2026-08-31T10:00:00Z"));
+    ASSERT_EQ(http_seed_adr(cache, "bevy", former), CBM_STORE_OK);
+    ASSERT_EQ(ui_adr_fill_gamedev_tree(root, "PURPOSE-GAME-SWITCH\n", NULL, NULL, NULL), 0);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(ui_adr_fill_server_start(&ts, &exec), 0);
+    port = cbm_http_server_port(ts.srv);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project\":\"bevy\"}", root);
+    ASSERT_GT(http_post_index(port, body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 202);
+    job = http_wait_index_done(port, 30000);
+    ASSERT_EQ(job, 2);
+
+    ASSERT_GT(ui_adr_get_request(&ts, "bevy", response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+    ASSERT_NOT_NULL(strstr(response, "PURPOSE-GAME-SWITCH"));
+    ASSERT_NULL(strstr(response, "PURPOSE-SDD-MVP1"));
+
+    stored = http_adr_load(cache, "bevy");
+    ASSERT_NOT_NULL(stored);
+    manual = http_between(stored, CBM_ADR_MANUAL_START, CBM_ADR_MANUAL_END);
+    ASSERT_NOT_NULL(manual);
+    ASSERT_NOT_NULL(strstr(manual, "# Keep notes"));
+    free(manual);
+    free(stored);
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_index_gamedev_only_tech_stack_no_sdd_fallback) {
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_gd_part");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_real_index_executor_t exec;
+    th_server_t ts;
+    char body[1024];
+    char response[8192];
+    int port;
+    int job;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-gd-partc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT_EQ(ui_adr_fill_gamedev_tree(root, NULL, "STACK-PARTIAL-ONLY\n", NULL, NULL), 0);
+    ASSERT_EQ(ui_adr_fill_leftover_sdd(root, "PURPOSE-SDD-FALLBACK\n", NULL, NULL, NULL), 0);
+    ASSERT(http_write_project_db(cache, "bevy", root, "2026-08-31T10:00:00Z"));
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(ui_adr_fill_server_start(&ts, &exec), 0);
+    port = cbm_http_server_port(ts.srv);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project\":\"bevy\"}", root);
+    ASSERT_GT(http_post_index(port, body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 202);
+    job = http_wait_index_done(port, 30000);
+    ASSERT_EQ(job, 2);
+
+    ASSERT_GT(ui_adr_get_request(&ts, "bevy", response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+    ASSERT_NOT_NULL(strstr(response, "STACK-PARTIAL-ONLY"));
+    ASSERT_NOT_NULL(strstr(response, "# Stack"));
+    ASSERT_NULL(strstr(response, "# Purpose"));
+    ASSERT_NULL(strstr(response, "# Decisions"));
+    ASSERT_NULL(strstr(response, "PURPOSE-SDD-FALLBACK"));
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_index_empty_gamedev_dir_no_sdd_fallback) {
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_gd_empty");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_real_index_executor_t exec;
+    th_server_t ts;
+    char body[1024];
+    char response[8192];
+    int port;
+    int job;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-gd-emptyc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT_EQ(ui_adr_fill_gamedev_tree(root, NULL, NULL, NULL, NULL), 0);
+    ASSERT_EQ(ui_adr_fill_leftover_sdd(root, "PURPOSE-SDD-EMPTYDIR\n", NULL, NULL, NULL), 0);
+    ASSERT(http_write_project_db(cache, "bevy", root, "2026-08-31T10:00:00Z"));
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(ui_adr_fill_server_start(&ts, &exec), 0);
+    port = cbm_http_server_port(ts.srv);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project\":\"bevy\"}", root);
+    ASSERT_GT(http_post_index(port, body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 202);
+    job = http_wait_index_done(port, 30000);
+    ASSERT_EQ(job, 2);
+
+    ASSERT_GT(ui_adr_get_request(&ts, "bevy", response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+    ASSERT_NOT_NULL(strstr(response, CBM_ADR_GENERATED_START));
+    ASSERT_NULL(strstr(response, "PURPOSE-SDD-EMPTYDIR"));
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_index_remove_gamedev_restores_sdd) {
+    static const char *former =
+        "<!-- CBM-GENERATED-START -->\n# Purpose\nPURPOSE-GAME-BEVY\n"
+        "<!-- CBM-GENERATED-END -->\n<!-- CBM-MANUAL-START -->\n# notes\n"
+        "<!-- CBM-MANUAL-END -->\n";
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_gd_rm");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_real_index_executor_t exec;
+    th_server_t ts;
+    char body[1024];
+    char response[8192];
+    int port;
+    int job;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-gd-rmc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT_EQ(th_write_file(TH_PATH(root, "main.py"), "def main():\n    return 1\n"), 0);
+    ASSERT_EQ(ui_adr_fill_leftover_sdd(root, "PURPOSE-SDD-RESTORED\n", NULL, NULL, NULL), 0);
+    ASSERT(http_write_project_db(cache, "bevy", root, "2026-08-31T10:00:00Z"));
+    ASSERT_EQ(http_seed_adr(cache, "bevy", former), CBM_STORE_OK);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(ui_adr_fill_server_start(&ts, &exec), 0);
+    port = cbm_http_server_port(ts.srv);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project\":\"bevy\"}", root);
+    ASSERT_GT(http_post_index(port, body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 202);
+    job = http_wait_index_done(port, 30000);
+    ASSERT_EQ(job, 2);
+
+    ASSERT_GT(ui_adr_get_request(&ts, "bevy", response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+    ASSERT_NOT_NULL(strstr(response, "PURPOSE-SDD-RESTORED"));
+    ASSERT_NULL(strstr(response, "PURPOSE-GAME-BEVY"));
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_index_both_skill_dirs_gone_leaves_last_blob) {
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_gd_gone");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_real_index_executor_t exec;
+    th_server_t ts;
+    char body[1024];
+    char response[8192];
+    char *stored;
+    int port;
+    int job;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-gd-gonec-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT_EQ(th_write_file(TH_PATH(root, "main.py"), "def main():\n    return 1\n"), 0);
+    ASSERT(http_write_project_db(cache, "bevy", root, "2026-08-31T10:00:00Z"));
+    ASSERT_EQ(http_seed_adr(cache, "bevy", "# Last gamedev generated leftover\n"), CBM_STORE_OK);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(ui_adr_fill_server_start(&ts, &exec), 0);
+    port = cbm_http_server_port(ts.srv);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project\":\"bevy\"}", root);
+    ASSERT_GT(http_post_index(port, body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 202);
+    job = http_wait_index_done(port, 30000);
+    ASSERT_EQ(job, 2);
+
+    ASSERT_GT(ui_adr_get_request(&ts, "bevy", response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+    ASSERT_NULL(strstr(response, "CBM-GENERATED"));
+    stored = http_adr_load(cache, "bevy");
+    ASSERT_NOT_NULL(stored);
+    ASSERT_STR_EQ(stored, "# Last gamedev generated leftover\n");
+    free(stored);
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_index_unreadable_game_context_omits_purpose) {
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_gd_unr");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_real_index_executor_t exec;
+    th_server_t ts;
+    char body[1024];
+    char response[8192];
+    int port;
+    int job;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-gd-unrc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT_EQ(ui_adr_fill_gamedev_tree(root, "PURPOSE-GAME-UNREADABLE\n", "STACK-READABLE-GAME\n",
+                                       "DECISION-READABLE-GAME\n", NULL),
+              0);
+    ASSERT_EQ(ui_adr_fill_leftover_sdd(root, "PURPOSE-SDD-UNREADABLE\n", NULL, NULL, NULL), 0);
+    /* chmod 0 is SDD-ADR-022, but .gamedev is not ALWAYS_SKIP — semantic_manifest
+     * hashes the trio as graph source and a mode-000 file fails the job. Directory
+     * at the trio path is the same fopen-fail fixture ui_make_unreadable uses when
+     * chmod still allows read. Fill omits Purpose; the index job can succeed. */
+    {
+        char purpose_path[512];
+        snprintf(purpose_path, sizeof(purpose_path), "%s",
+                 TH_PATH(root, ".gamedev/game_context.md"));
+        (void)cbm_unlink(purpose_path);
+        ASSERT_EQ(th_mkdir_p(purpose_path), 0);
+    }
+    ASSERT(http_write_project_db(cache, "bevy", root, "2026-08-31T10:00:00Z"));
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(ui_adr_fill_server_start(&ts, &exec), 0);
+    port = cbm_http_server_port(ts.srv);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project\":\"bevy\"}", root);
+    ASSERT_GT(http_post_index(port, body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 202);
+    job = http_wait_index_done(port, 30000);
+    ASSERT_EQ(job, 2);
+
+    ASSERT_GT(ui_adr_get_request(&ts, "bevy", response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+    ASSERT_NOT_NULL(strstr(response, "STACK-READABLE-GAME"));
+    ASSERT_NOT_NULL(strstr(response, "DECISION-READABLE-GAME"));
+    ASSERT_NULL(strstr(response, "# Purpose"));
+    ASSERT_NULL(strstr(response, "PURPOSE-SDD-UNREADABLE"));
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+TEST(ui_adr_gamedev_generated_hand_edit_replaced_on_reindex) {
+    static const char *hand =
+        "<!-- CBM-GENERATED-START -->\n# Purpose\nPURPOSE-HAND-EDIT-GAME\n"
+        "<!-- CBM-GENERATED-END -->\n<!-- CBM-MANUAL-START -->\n# notes\n"
+        "<!-- CBM-MANUAL-END -->\n";
+    char cache[256];
+    char *root = th_mktempdir("cbm_http_gd_canon");
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    th_ui_real_index_executor_t exec;
+    th_server_t ts;
+    char body[1024];
+    char response[8192];
+    int port;
+    int job;
+
+    snprintf(cache, sizeof(cache), "/tmp/cbm-http-gd-canon-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_NOT_NULL(root);
+    ASSERT_EQ(ui_adr_fill_gamedev_tree(root, "PURPOSE-CANONICAL-GAME\n", NULL, NULL, NULL), 0);
+    ASSERT(http_write_project_db(cache, "bevy", root, "2026-08-31T10:00:00Z"));
+    ASSERT_EQ(http_seed_adr(cache, "bevy", hand), CBM_STORE_OK);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+    ASSERT_EQ(ui_adr_fill_server_start(&ts, &exec), 0);
+    port = cbm_http_server_port(ts.srv);
+
+    ASSERT_GT(ui_adr_post_escaped(&ts, "bevy", hand, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+
+    snprintf(body, sizeof(body), "{\"root_path\":\"%s\",\"project\":\"bevy\"}", root);
+    ASSERT_GT(http_post_index(port, body, response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 202);
+    job = http_wait_index_done(port, 30000);
+    ASSERT_EQ(job, 2);
+
+    ASSERT_GT(ui_adr_get_request(&ts, "bevy", response, sizeof(response)), 0);
+    ASSERT_EQ(th_status(response), 200);
+    ASSERT_NOT_NULL(strstr(response, "PURPOSE-CANONICAL-GAME"));
+    ASSERT_NULL(strstr(response, "PURPOSE-HAND-EDIT-GAME"));
+
+    th_server_stop(&ts);
+    http_restore_cache(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(root);
+    PASS();
+}
+
+/**
+ * @sdd-task: Task #2 - HTTP POST + GET merge + C Gherkin + publish copy
+ * @sdd-spec: specs/spec-006-k3n-spec-archive/spec.md
+ * @sdd-decision: SDD-ADR-030 POST /api/spec-board; SDD-ADR-031 flag object
+ * @sdd-why: C owns merge/409/404/400/idempotent/orphan; fixtures stay under /tmp
+ * @human-debug: 409 still persisted → POST wrote before the done-column check
+ */
+static const char *SB_HTTP_ACTIVE =
+    "{\n"
+    "  \"active_spec\": null,\n"
+    "  \"planned_specs\": [\"spec-010-aaa-planned\"],\n"
+    "  \"draft_specs\": [],\n"
+    "  \"completed_specs\": [\"spec-012-ccc-closed\"]\n"
+    "}\n";
+
+static char *th_read_file_alloc(const char *path) {
+    FILE *f = cbm_fopen(path, "rb");
+    long sz;
+    char *buf;
+    size_t n;
+    if (!f) {
+        return NULL;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return NULL;
+    }
+    sz = ftell(f);
+    if (sz < 0) {
+        fclose(f);
+        return NULL;
+    }
+    rewind(f);
+    buf = malloc((size_t)sz + 1);
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
+    n = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[n] = '\0';
+    return buf;
+}
+
+static const char *th_http_json(const char *resp) {
+    const char *body = strstr(resp, "\r\n\r\n");
+    return body ? body + 4 : NULL;
+}
+
+static bool sb_json_spec_has(const char *json, const char *id, const char *needle) {
+    char key[256];
+    const char *p;
+    const char *next;
+    size_t span;
+    char buf[2048];
+
+    snprintf(key, sizeof(key), "\"id\":\"%s\"", id);
+    p = strstr(json, key);
+    if (!p) {
+        return false;
+    }
+    next = strstr(p + 1, "\"id\":");
+    span = next ? (size_t)(next - p) : strlen(p);
+    if (span >= sizeof(buf)) {
+        span = sizeof(buf) - 1;
+    }
+    memcpy(buf, p, span);
+    buf[span] = '\0';
+    return strstr(buf, needle) != NULL;
+}
+
+static int sb_http_seed_board(ui_delete_fixture_t *fx) {
+    if (th_write_file(TH_PATH(fx->root_dir, ".sdd-skill/specs/active.json"), SB_HTTP_ACTIVE) != 0) {
+        return -1;
+    }
+    if (!http_write_project_db(fx->cache_dir, "alpha", fx->root_dir, NULL)) {
+        return -1;
+    }
+    return 0;
+}
+
+static int sb_http_seed_flag(const ui_delete_fixture_t *fx, const char *spec_id, int archived) {
+    char db_path[1024];
+    cbm_store_t *st;
+    int rc;
+
+    ui_delete_db_path(fx, "alpha", db_path, sizeof(db_path));
+    st = cbm_store_open_path(db_path);
+    if (!st) {
+        return CBM_STORE_ERR;
+    }
+    rc = cbm_store_spec_archive_set(st, spec_id, archived);
+    cbm_store_close(st);
+    return rc;
+}
+
+static int ui_spec_board_get(th_server_t *ts, const char *project, char *resp, size_t respsz) {
+    char req[512];
+    int n = snprintf(req, sizeof(req), "GET /api/spec-board?project=%s HTTP/1.1\r\n\r\n", project);
+    if (n < 0 || (size_t)n >= sizeof(req)) {
+        return 0;
+    }
+    return th_http(cbm_http_server_port(ts->srv), req, resp, respsz);
+}
+
+static int ui_spec_board_post(th_server_t *ts, const char *body, char *resp, size_t respsz) {
+    char req[4608];
+    int n = snprintf(req, sizeof(req),
+                     "POST /api/spec-board HTTP/1.1\r\n"
+                     "Content-Type: application/json\r\n"
+                     "Content-Length: %zu\r\n\r\n%s",
+                     strlen(body), body);
+    if (n < 0 || (size_t)n >= sizeof(req)) {
+        return 0;
+    }
+    return th_http(cbm_http_server_port(ts->srv), req, resp, respsz);
+}
+
+TEST(ui_spec_board_get_merges_done_orphan_leftover_todo) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[65536];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    ASSERT_EQ(sb_http_seed_flag(&fx, "spec-012-ccc-closed", 1), CBM_STORE_OK);
+    ASSERT_EQ(sb_http_seed_flag(&fx, "spec-099-zzz-gone", 1), CBM_STORE_OK);
+    ASSERT_EQ(sb_http_seed_flag(&fx, "spec-010-aaa-planned", 1), CBM_STORE_OK);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_spec_board_get(&ts, "alpha", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_TRUE(sb_json_spec_has(json, "spec-012-ccc-closed", "\"column\":\"done\""));
+    ASSERT_TRUE(sb_json_spec_has(json, "spec-012-ccc-closed", "\"archived\":true"));
+    ASSERT_NULL(strstr(json, "\"column\":\"archived\""));
+    ASSERT_NULL(strstr(json, "spec-099-zzz-gone"));
+    ASSERT_TRUE(sb_json_spec_has(json, "spec-010-aaa-planned", "\"column\":\"todo\""));
+    ASSERT_TRUE(sb_json_spec_has(json, "spec-010-aaa-planned", "\"archived\":true"));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_post_200_flag_object_and_idempotent) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[8192];
+    const char *json;
+    char *before;
+    char *after;
+    char active_path[1024];
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    snprintf(active_path, sizeof(active_path), "%s/.sdd-skill/specs/active.json", fx.root_dir);
+    before = th_read_file_alloc(active_path);
+    ASSERT_NOT_NULL(before);
+
+    ASSERT_GT(ui_spec_board_post(&ts,
+                                 "{\"project\":\"alpha\",\"spec_id\":\"spec-012-ccc-closed\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "\"spec_id\":\"spec-012-ccc-closed\""));
+    ASSERT_NOT_NULL(strstr(json, "\"archived\":true"));
+    ASSERT_NULL(strstr(json, "sdd_skill_present"));
+    ASSERT_NULL(strstr(json, "\"specs\""));
+
+    after = th_read_file_alloc(active_path);
+    ASSERT_NOT_NULL(after);
+    ASSERT_STR_EQ(before, after);
+    free(after);
+
+    ASSERT_GT(ui_spec_board_post(&ts,
+                                 "{\"project\":\"alpha\",\"spec_id\":\"spec-012-ccc-closed\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "\"archived\":true"));
+
+    ASSERT_GT(ui_spec_board_get(&ts, "alpha", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_TRUE(sb_json_spec_has(json, "spec-012-ccc-closed", "\"archived\":true"));
+    ASSERT_TRUE(sb_json_spec_has(json, "spec-012-ccc-closed", "\"column\":\"done\""));
+
+    after = th_read_file_alloc(active_path);
+    ASSERT_NOT_NULL(after);
+    ASSERT_STR_EQ(before, after);
+    free(after);
+    free(before);
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_post_409_todo_writes_nothing) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[8192];
+    const char *json;
+    char *before;
+    char *after;
+    char active_path[1024];
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    snprintf(active_path, sizeof(active_path), "%s/.sdd-skill/specs/active.json", fx.root_dir);
+    before = th_read_file_alloc(active_path);
+    ASSERT_NOT_NULL(before);
+
+    ASSERT_GT(ui_spec_board_post(&ts,
+                                 "{\"project\":\"alpha\",\"spec_id\":\"spec-010-aaa-planned\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 409);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"spec not done\"}");
+
+    after = th_read_file_alloc(active_path);
+    ASSERT_NOT_NULL(after);
+    ASSERT_STR_EQ(before, after);
+    free(before);
+    free(after);
+
+    ASSERT_GT(ui_spec_board_get(&ts, "alpha", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_TRUE(sb_json_spec_has(json, "spec-010-aaa-planned", "\"archived\":false"));
+    ASSERT_TRUE(sb_json_spec_has(json, "spec-010-aaa-planned", "\"column\":\"todo\""));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_post_404_unknown_spec) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[4096];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_spec_board_post(&ts,
+                                 "{\"project\":\"alpha\",\"spec_id\":\"spec-099-zzz-gone\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 404);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"spec not found\"}");
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_post_400_missing_project) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[4096];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_spec_board_post(&ts, "{\"spec_id\":\"spec-012-ccc-closed\",\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 400);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "\"error\""));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_post_400_invalid_archived) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[4096];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_spec_board_post(&ts,
+                                 "{\"project\":\"alpha\",\"spec_id\":\"spec-012-ccc-closed\","
+                                 "\"archived\":\"yes\"}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 400);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"invalid archived\"}");
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_post_404_unknown_project) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[4096];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_spec_board_post(&ts,
+                                 "{\"project\":\"missing-proj\",\"spec_id\":\"spec-012-ccc-closed\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 404);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"project not found\"}");
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_post_423_busy) {
+    ui_delete_fixture_t fx;
+    th_ui_mutation_guard_t guard;
+    th_server_t ts;
+    char resp[4096];
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    th_ui_mutation_guard_init(&guard, false);
+    ASSERT_EQ(th_server_start_with_mutation_guard(&ts, NULL, &guard), 0);
+
+    ASSERT_GT(ui_spec_board_post(&ts,
+                                 "{\"project\":\"alpha\",\"spec_id\":\"spec-012-ccc-closed\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 423);
+    ASSERT_NOT_NULL(strstr(resp, "project is busy; retry after indexing"));
+    ASSERT_EQ(atomic_load(&guard.begin_calls), 1);
+    ASSERT_EQ(atomic_load(&guard.end_calls), 0);
+
+    ASSERT_GT(ui_spec_board_get(&ts, "alpha", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    ASSERT_TRUE(sb_json_spec_has(th_http_json(resp), "spec-012-ccc-closed", "\"archived\":false"));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+/**
+ * @sdd-task: Task #2 - HTTP GET additive + POST epic-id 404
+ * @sdd-spec: specs/spec-008-g8r-grill-epic-todo/spec.md
+ * @sdd-decision: SDD-ADR-035 additive GET; SDD-ADR-036 grill parse not in HTTP
+ * @sdd-why: C HTTP Gherkin: mixed GET JSON, POST epic 404, unknown project, zero skill writes
+ * @human-debug: POST epic 200 → spec_board_find walked epics[] or store ran before 404
+ */
+static const char *SB_HTTP_GRILL_EPIC_ID =
+    ".grill/plans/inbox-plan/epics/epic-001-inbox.md";
+
+static int sb_http_seed_grill(ui_delete_fixture_t *fx) {
+    if (th_write_file(TH_PATH(fx->root_dir, ".grill/index.md"),
+                      "# .grill/\n\n"
+                      "| slug | title | status |\n"
+                      "|------|-------|--------|\n"
+                      "| inbox-plan | Inbox Plan | draft |\n") != 0) {
+        return -1;
+    }
+    if (th_write_file(TH_PATH(fx->root_dir, ".grill/plans/inbox-plan/epics/epic-001-inbox.md"),
+                      "name: inbox\nstatus: pending\n\nsummary: Filter unread first.\n") != 0) {
+        return -1;
+    }
+    return th_write_file(TH_PATH(fx->root_dir, ".sdd-skill/specs/spec-010-aaa-planned/spec.md"),
+                         "# Spec-010-aaa: Planned\n\nNo Companion-to grill path.\n");
+}
+
+/**
+ * @sdd-task: Task #2 - HTTP GET additive + POST leftover locks
+ * @sdd-spec: specs/spec-015-s5k-specs-debt-and-path/spec.md
+ * @sdd-decision: SDD-ADR-065 same GET always-emit debt; POST stays spec-only
+ * @sdd-why: fixture + JSON helpers for HTTP debt Gherkin; HTTP does not fopen TECH_DEBT.md
+ * @human-debug: GET 200 missing debt → to_json not Task #1; POST epic 200 → find walked epics[]
+ */
+static int sb_http_seed_tech_debt(ui_delete_fixture_t *fx, const char *body) {
+    return th_write_file(TH_PATH(fx->root_dir, ".sdd-skill/baseline/TECH_DEBT.md"), body);
+}
+
+static int sb_json_debt_len(const char *json) {
+    const char *p;
+    const char *end;
+    int n = 0;
+
+    if (!json) {
+        return -1;
+    }
+    p = strstr(json, "\"debt\":");
+    if (!p) {
+        return -1;
+    }
+    p = strchr(p, '[');
+    if (!p) {
+        return -1;
+    }
+    end = strchr(p, ']');
+    if (!end) {
+        return -1;
+    }
+    for (;;) {
+        p = strstr(p, "\"id\":");
+        if (!p || p >= end) {
+            break;
+        }
+        n++;
+        p += 5;
+    }
+    return n;
+}
+
+static int sb_json_debt_copy(const char *json, char *buf, size_t bufsz) {
+    const char *p;
+    const char *end;
+    size_t n;
+
+    if (!json || !buf || bufsz == 0) {
+        return -1;
+    }
+    p = strstr(json, "\"debt\":");
+    if (!p) {
+        return -1;
+    }
+    p = strchr(p, '[');
+    if (!p) {
+        return -1;
+    }
+    end = strchr(p, ']');
+    if (!end) {
+        return -1;
+    }
+    n = (size_t)(end - p + 1);
+    if (n >= bufsz) {
+        n = bufsz - 1;
+    }
+    memcpy(buf, p, n);
+    buf[n] = '\0';
+    return 0;
+}
+
+static int sb_http_archive_has_id(const ui_delete_fixture_t *fx, const char *spec_id) {
+    char db_path[1024];
+    cbm_store_t *st;
+    cbm_spec_archive_row_t rows[CBM_SPEC_ARCHIVE_CAP];
+    int n = 0;
+    int i;
+
+    ui_delete_db_path(fx, "alpha", db_path, sizeof(db_path));
+    st = cbm_store_open_path_query(db_path);
+    if (!st) {
+        return -1;
+    }
+    if (cbm_store_spec_archive_load(st, rows, CBM_SPEC_ARCHIVE_CAP, &n) != CBM_STORE_OK) {
+        cbm_store_close(st);
+        return -1;
+    }
+    cbm_store_close(st);
+    for (i = 0; i < n; i++) {
+        if (strcmp(rows[i].spec_id, spec_id) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static bool sb_json_obj_has(const char *json, const char *id, const char *needle) {
+    char key[320];
+    const char *p;
+    const char *start;
+    const char *next;
+    size_t span;
+    char buf[2048];
+
+    snprintf(key, sizeof(key), "\"id\":\"%s\"", id);
+    p = strstr(json, key);
+    if (!p) {
+        return false;
+    }
+    start = p;
+    while (start > json && *start != '{') {
+        start--;
+    }
+    next = strstr(p + 1, "\"id\":");
+    span = next ? (size_t)(next - start) : strlen(start);
+    if (span >= sizeof(buf)) {
+        span = sizeof(buf) - 1;
+    }
+    memcpy(buf, start, span);
+    buf[span] = '\0';
+    return strstr(buf, needle) != NULL;
+}
+
+static bool sb_json_specs_contain_id(const char *json, const char *id) {
+    const char *specs;
+    const char *epics;
+    char key[320];
+    size_t span;
+    char buf[8192];
+
+    specs = strstr(json, "\"specs\":");
+    epics = strstr(json, "\"epics\":");
+    if (!specs || !epics || epics <= specs) {
+        return false;
+    }
+    snprintf(key, sizeof(key), "\"id\":\"%s\"", id);
+    span = (size_t)(epics - specs);
+    if (span >= sizeof(buf)) {
+        span = sizeof(buf) - 1;
+    }
+    memcpy(buf, specs, span);
+    buf[span] = '\0';
+    return strstr(buf, key) != NULL;
+}
+
+TEST(ui_spec_board_get_200_mixed_todo_grill_epics) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[65536];
+    const char *json;
+    char index_path[1024];
+    char epic_path[1024];
+    char active_path[1024];
+    char *index_before;
+    char *epic_before;
+    char *active_before;
+    char *index_after;
+    char *epic_after;
+    char *active_after;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    ASSERT_EQ(sb_http_seed_grill(&fx), 0);
+    ASSERT_EQ(sb_http_seed_flag(&fx, SB_HTTP_GRILL_EPIC_ID, 1), CBM_STORE_OK);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    snprintf(index_path, sizeof(index_path), "%s/.grill/index.md", fx.root_dir);
+    snprintf(epic_path, sizeof(epic_path), "%s/.grill/plans/inbox-plan/epics/epic-001-inbox.md",
+             fx.root_dir);
+    snprintf(active_path, sizeof(active_path), "%s/.sdd-skill/specs/active.json", fx.root_dir);
+    index_before = th_read_file_alloc(index_path);
+    epic_before = th_read_file_alloc(epic_path);
+    active_before = th_read_file_alloc(active_path);
+    ASSERT_NOT_NULL(index_before);
+    ASSERT_NOT_NULL(epic_before);
+    ASSERT_NOT_NULL(active_before);
+
+    ASSERT_GT(ui_spec_board_get(&ts, "alpha", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "\"grill_skill_present\":true"));
+    ASSERT_TRUE(sb_json_obj_has(json, SB_HTTP_GRILL_EPIC_ID, "\"kind\":\"epic\""));
+    ASSERT_TRUE(sb_json_obj_has(json, SB_HTTP_GRILL_EPIC_ID, "\"column\":\"todo\""));
+    ASSERT_TRUE(sb_json_obj_has(json, SB_HTTP_GRILL_EPIC_ID, "\"title\":\"inbox\""));
+    ASSERT_TRUE(sb_json_obj_has(json, SB_HTTP_GRILL_EPIC_ID, "\"summary\":\"Filter unread first.\""));
+    ASSERT_TRUE(sb_json_obj_has(json, SB_HTTP_GRILL_EPIC_ID, "\"plan_title\":\"Inbox Plan\""));
+    ASSERT_FALSE(sb_json_obj_has(json, SB_HTTP_GRILL_EPIC_ID, "\"archived\""));
+    ASSERT_FALSE(sb_json_specs_contain_id(json, SB_HTTP_GRILL_EPIC_ID));
+    ASSERT_TRUE(sb_json_spec_has(json, "spec-010-aaa-planned", "\"column\":\"todo\""));
+    ASSERT_FALSE(sb_json_obj_has(json, "spec-010-aaa-planned", "\"kind\""));
+    ASSERT_NULL(strstr(json, "\"has_more\""));
+    ASSERT_NULL(strstr(json, "gamedev_skill_present"));
+    ASSERT_NOT_NULL(strstr(json, "\"debt\":[]"));
+
+    index_after = th_read_file_alloc(index_path);
+    epic_after = th_read_file_alloc(epic_path);
+    active_after = th_read_file_alloc(active_path);
+    ASSERT_NOT_NULL(index_after);
+    ASSERT_NOT_NULL(epic_after);
+    ASSERT_NOT_NULL(active_after);
+    ASSERT_STR_EQ(index_before, index_after);
+    ASSERT_STR_EQ(epic_before, epic_after);
+    ASSERT_STR_EQ(active_before, active_after);
+    free(index_before);
+    free(epic_before);
+    free(active_before);
+    free(index_after);
+    free(epic_after);
+    free(active_after);
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_post_404_epic_id_writes_nothing) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[65536];
+    const char *json;
+    char epic_path[1024];
+    char active_path[1024];
+    char *epic_before;
+    char *active_before;
+    char *epic_after;
+    char *active_after;
+    char post_body[512];
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    ASSERT_EQ(sb_http_seed_grill(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_spec_board_get(&ts, "alpha", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_TRUE(sb_json_obj_has(json, SB_HTTP_GRILL_EPIC_ID, "\"kind\":\"epic\""));
+    ASSERT_FALSE(sb_json_obj_has(json, SB_HTTP_GRILL_EPIC_ID, "\"archived\""));
+    ASSERT_FALSE(sb_json_specs_contain_id(json, SB_HTTP_GRILL_EPIC_ID));
+
+    snprintf(epic_path, sizeof(epic_path), "%s/.grill/plans/inbox-plan/epics/epic-001-inbox.md",
+             fx.root_dir);
+    snprintf(active_path, sizeof(active_path), "%s/.sdd-skill/specs/active.json", fx.root_dir);
+    epic_before = th_read_file_alloc(epic_path);
+    active_before = th_read_file_alloc(active_path);
+    ASSERT_NOT_NULL(epic_before);
+    ASSERT_NOT_NULL(active_before);
+
+    snprintf(post_body, sizeof(post_body),
+             "{\"project\":\"alpha\",\"spec_id\":\"%s\",\"archived\":true}", SB_HTTP_GRILL_EPIC_ID);
+    ASSERT_GT(ui_spec_board_post(&ts, post_body, resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 404);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"spec not found\"}");
+    ASSERT_EQ(sb_http_archive_has_id(&fx, SB_HTTP_GRILL_EPIC_ID), 0);
+
+    epic_after = th_read_file_alloc(epic_path);
+    active_after = th_read_file_alloc(active_path);
+    ASSERT_NOT_NULL(epic_after);
+    ASSERT_NOT_NULL(active_after);
+    ASSERT_STR_EQ(epic_before, epic_after);
+    ASSERT_STR_EQ(active_before, active_after);
+    free(epic_before);
+    free(active_before);
+    free(epic_after);
+    free(active_after);
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_get_404_unknown_project) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[4096];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_spec_board_get(&ts, "missing-proj", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 404);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"project not found\"}");
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_get_200_leaves_skill_trees) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[65536];
+    char index_path[1024];
+    char epic_path[1024];
+    char active_path[1024];
+    char debt_path[1024];
+    char *index_before;
+    char *epic_before;
+    char *active_before;
+    char *debt_before;
+    char *index_after;
+    char *epic_after;
+    char *active_after;
+    char *debt_after;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    ASSERT_EQ(sb_http_seed_grill(&fx), 0);
+    ASSERT_EQ(sb_http_seed_tech_debt(&fx, "## TD-005: leftover cache\nStatus: identified\n"), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    snprintf(index_path, sizeof(index_path), "%s/.grill/index.md", fx.root_dir);
+    snprintf(epic_path, sizeof(epic_path), "%s/.grill/plans/inbox-plan/epics/epic-001-inbox.md",
+             fx.root_dir);
+    snprintf(active_path, sizeof(active_path), "%s/.sdd-skill/specs/active.json", fx.root_dir);
+    snprintf(debt_path, sizeof(debt_path), "%s/.sdd-skill/baseline/TECH_DEBT.md", fx.root_dir);
+    index_before = th_read_file_alloc(index_path);
+    epic_before = th_read_file_alloc(epic_path);
+    active_before = th_read_file_alloc(active_path);
+    debt_before = th_read_file_alloc(debt_path);
+    ASSERT_NOT_NULL(index_before);
+    ASSERT_NOT_NULL(epic_before);
+    ASSERT_NOT_NULL(active_before);
+    ASSERT_NOT_NULL(debt_before);
+
+    ASSERT_GT(ui_spec_board_get(&ts, "alpha", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+
+    index_after = th_read_file_alloc(index_path);
+    epic_after = th_read_file_alloc(epic_path);
+    active_after = th_read_file_alloc(active_path);
+    debt_after = th_read_file_alloc(debt_path);
+    ASSERT_NOT_NULL(index_after);
+    ASSERT_NOT_NULL(epic_after);
+    ASSERT_NOT_NULL(active_after);
+    ASSERT_NOT_NULL(debt_after);
+    ASSERT_STR_EQ(index_before, index_after);
+    ASSERT_STR_EQ(epic_before, epic_after);
+    ASSERT_STR_EQ(active_before, active_after);
+    ASSERT_STR_EQ(debt_before, debt_after);
+    free(index_before);
+    free(epic_before);
+    free(active_before);
+    free(debt_before);
+    free(index_after);
+    free(epic_after);
+    free(active_after);
+    free(debt_after);
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+/**
+ * @sdd-task: Task #2 - HTTP GET additive + POST leftover locks
+ * @sdd-spec: specs/spec-015-s5k-specs-debt-and-path/spec.md
+ * @sdd-decision: SDD-ADR-065 same GET always-emit debt; POST stays spec-only
+ * @sdd-why: prove existing handle_spec_board_get dispatch (read → specs-only merge → to_json)
+ * @human-debug: GET 200 missing debt → to_json not Task #1; POST epic 200 → find walked epics[]
+ */
+TEST(ui_spec_board_get_200_open_heading_debt) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[65536];
+    const char *json;
+    char debt_buf[1024];
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    ASSERT_EQ(sb_http_seed_flag(&fx, "spec-012-ccc-closed", 1), CBM_STORE_OK);
+    ASSERT_EQ(sb_http_seed_tech_debt(&fx,
+                                     "# Tech Debt\n\n"
+                                     "## TD-005: leftover cache\n"
+                                     "Title: wrong title from field\n"
+                                     "Status: identified\n"
+                                     "Description: leftover cache body.\n"),
+              0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_spec_board_get(&ts, "alpha", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_EQ(sb_json_debt_len(json), 1);
+    ASSERT_NOT_NULL(strstr(json, "\"debt\":[{\"id\":\"TD-005\",\"title\":\"leftover cache\"}]"));
+    ASSERT_NULL(strstr(json, "has_more"));
+    ASSERT_TRUE(sb_json_spec_has(json, "spec-012-ccc-closed", "\"archived\":true"));
+    ASSERT_EQ(sb_json_debt_copy(json, debt_buf, sizeof(debt_buf)), 0);
+    ASSERT_NULL(strstr(debt_buf, "archived"));
+    ASSERT_NULL(strstr(debt_buf, "severity"));
+    ASSERT_NULL(strstr(debt_buf, "category"));
+    ASSERT_NULL(strstr(debt_buf, "\"status\""));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_get_200_17th_debt_omitted) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[65536];
+    const char *json;
+    char body[4096];
+    int n = 0;
+    int i;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    for (i = 1; i <= 17; i++) {
+        n += snprintf(body + n, sizeof(body) - (size_t)n,
+                      "## TD-%03d: item %d\nStatus: identified\n\n", i, i);
+    }
+    ASSERT_EQ(sb_http_seed_tech_debt(&fx, body), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_spec_board_get(&ts, "alpha", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_EQ(sb_json_debt_len(json), 16);
+    ASSERT_NOT_NULL(strstr(json, "TD-016"));
+    ASSERT_NULL(strstr(json, "TD-017"));
+    ASSERT_NULL(strstr(json, "has_more"));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+/**
+ * @sdd-task: Task #2 - C Inbox walk + conversion + HTTP bytes
+ * @sdd-spec: specs/spec-011-q5n-game-phase-board/spec.md
+ * @sdd-decision: SDD-ADR-046, SDD-ADR-047
+ * @sdd-why: GET inbox objects + conversion + zero skill writes; 400/404 stay
+ * @human-debug: If GET 500 → calloc/to_json; if Inbox empty with leftover grill → conversion
+ */
+static int ui_game_board_get(th_server_t *ts, const char *project, char *resp, size_t respsz) {
+    char req[512];
+    int n;
+    if (project && project[0]) {
+        n = snprintf(req, sizeof(req), "GET /api/game-board?project=%s HTTP/1.1\r\n\r\n", project);
+    } else {
+        n = snprintf(req, sizeof(req), "GET /api/game-board HTTP/1.1\r\n\r\n");
+    }
+    if (n < 0 || (size_t)n >= sizeof(req)) {
+        return 0;
+    }
+    return th_http(cbm_http_server_port(ts->srv), req, resp, respsz);
+}
+
+static const char *GB_HTTP_INBOX_EPIC_ID =
+    ".grill/plans/inbox-plan/epics/epic-001-inbox.md";
+
+static int gb_http_seed_bevy(ui_delete_fixture_t *fx) {
+    if (th_mkdir_p(TH_PATH(fx->root_dir, ".gamedev")) != 0) {
+        return -1;
+    }
+    if (!http_write_project_db(fx->cache_dir, "bevy", fx->root_dir, NULL)) {
+        return -1;
+    }
+    return 0;
+}
+
+static int gb_http_seed_inbox_grill(ui_delete_fixture_t *fx) {
+    if (th_write_file(TH_PATH(fx->root_dir, ".grill/index.md"),
+                      "# .grill/\n\n"
+                      "| slug | title | status |\n"
+                      "|------|-------|--------|\n"
+                      "| inbox-plan | Inbox Plan | draft |\n") != 0) {
+        return -1;
+    }
+    return th_write_file(TH_PATH(fx->root_dir, ".grill/plans/inbox-plan/epics/epic-001-inbox.md"),
+                         "name: inbox\nstatus: pending\n\nsummary: Filter unread first.\n");
+}
+
+/**
+ * @sdd-task: Task #2 - HTTP GET leftover locks
+ * @sdd-spec: specs/spec-016-d9v-game-inbox-registry/spec.md
+ * @sdd-decision: SDD-ADR-069 same GET omit; SDD-ADR-070 parse stays in game_board.c
+ * @sdd-why: HTTP proves registry omit + 404 + bytes + no create; spec-board must not read registry
+ * @human-debug: GET still lists a hide-set leftover → fill_inbox not reached; spec-board omit → spec_board opened the registry
+ */
+static int gb_http_seed_registry(ui_delete_fixture_t *fx, const char *rows) {
+    char body[8192];
+    snprintf(body, sizeof(body),
+             "| Epic | Plan | Name | Origin | Status |\n"
+             "|------|------|------|--------|--------|\n"
+             "%s",
+             rows ? rows : "");
+    return th_write_file(TH_PATH(fx->root_dir, ".gamedev/epics_registry.md"), body);
+}
+
+static int gb_http_seed_active_json(ui_delete_fixture_t *fx) {
+    return th_write_file(TH_PATH(fx->root_dir, ".sdd-skill/specs/active.json"), SB_HTTP_ACTIVE);
+}
+
+/**
+ * @sdd-task: Task #3 - HTTP POST + GET merge + C Gherkin + publish copy
+ * @sdd-spec: specs/spec-012-m2k-game-expand-archive-deps/spec.md
+ * @sdd-decision: SDD-ADR-053 POST /api/game-board; HTTP merge; publish copy
+ * @sdd-why: C owns merge/409/404/400/idempotent/orphan/zero writes; fixtures stay under /tmp
+ * @human-debug: 409 still persisted → POST wrote before the done-after-overlay check
+ */
+static const char *GB_HTTP_AUDIO_ID = ".gamedev/phases/01-preproduction/audio-direction.md";
+static const char *GB_HTTP_GDD_ID = ".gamedev/phases/01-preproduction/gdd.md";
+static const char *GB_HTTP_SYS_ID = ".gamedev/phases/02-production/systems/SYS-001-movement";
+static const char *GB_HTTP_ORPHAN_ID = ".gamedev/phases/01-preproduction/missing-doc.md";
+
+static int ui_game_board_post(th_server_t *ts, const char *body, char *resp, size_t respsz) {
+    char req[4608];
+    int n = snprintf(req, sizeof(req),
+                     "POST /api/game-board HTTP/1.1\r\n"
+                     "Content-Type: application/json\r\n"
+                     "Content-Length: %zu\r\n\r\n%s",
+                     strlen(body), body);
+    if (n < 0 || (size_t)n >= sizeof(req)) {
+        return 0;
+    }
+    return th_http(cbm_http_server_port(ts->srv), req, resp, respsz);
+}
+
+static int gb_http_seed_flag(const ui_delete_fixture_t *fx, const char *card_id, int archived) {
+    char db_path[1024];
+    cbm_store_t *st;
+    int rc;
+
+    ui_delete_db_path(fx, "bevy", db_path, sizeof(db_path));
+    st = cbm_store_open_path(db_path);
+    if (!st) {
+        return CBM_STORE_ERR;
+    }
+    rc = cbm_store_game_archive_set(st, card_id, archived);
+    cbm_store_close(st);
+    return rc;
+}
+
+static int gb_http_archive_has_id(const ui_delete_fixture_t *fx, const char *card_id) {
+    char db_path[1024];
+    cbm_store_t *st;
+    cbm_game_archive_row_t rows[16];
+    int n = 0;
+    int i;
+
+    ui_delete_db_path(fx, "bevy", db_path, sizeof(db_path));
+    st = cbm_store_open_path_query(db_path);
+    if (!st) {
+        return -1;
+    }
+    if (cbm_store_game_archive_load(st, rows, 16, &n) != CBM_STORE_OK) {
+        cbm_store_close(st);
+        return -1;
+    }
+    cbm_store_close(st);
+    for (i = 0; i < n; i++) {
+        if (strcmp(rows[i].card_id, card_id) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int gb_http_seed_done_audio(ui_delete_fixture_t *fx) {
+    return th_write_file(TH_PATH(fx->root_dir, ".gamedev/phases/01-preproduction/audio-direction.md"),
+                         "status: approved\n");
+}
+
+static int gb_http_seed_pending_gdd(ui_delete_fixture_t *fx) {
+    return th_write_file(TH_PATH(fx->root_dir, ".gamedev/phases/01-preproduction/gdd.md"),
+                         "status: draft\n");
+}
+
+static int gb_http_seed_sys_done(ui_delete_fixture_t *fx) {
+    return th_write_file(
+        TH_PATH(fx->root_dir, ".gamedev/phases/02-production/systems/SYS-001-movement/spec.md"),
+        "status: approved\n");
+}
+
+static int gb_http_seed_blocked_state(ui_delete_fixture_t *fx) {
+    return th_write_file(TH_PATH(fx->root_dir, ".gamedev/state.md"),
+                         "phase=02-production focus=\"x\"\n"
+                         "gameplay-engineer:blocked:\"Combat system v2\":\"Waiting on final boss design\"\n");
+}
+
+/**
+ * @sdd-task: Task #2 - HTTP GET additive + POST leftover locks
+ * @sdd-spec: specs/spec-017-b4w-game-debt-chrome/spec.md
+ * @sdd-decision: SDD-ADR-072 same GET always-emit debt; SDD-ADR-073 HTTP does not fopen backlog.md
+ * @sdd-why: Prove GET debt JSON + no has_more + 404 + bytes + no create; spec-board stays TECH_DEBT.md
+ * @human-debug: GET 200 missing debt → to_json not Task #1; GET created backlog.md → HTTP wrote; spec-board has debt:gate → spec_board opened backlog.md
+ */
+static int gb_http_seed_backlog(ui_delete_fixture_t *fx, const char *body) {
+    return th_write_file(TH_PATH(fx->root_dir, ".gamedev/backlog.md"), body);
+}
+
+TEST(ui_game_board_get_200_present_true_empty_arrays) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[8192];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "\"gamedev_skill_present\":true"));
+    ASSERT_NOT_NULL(strstr(json, "\"inbox\":[]"));
+    ASSERT_NOT_NULL(strstr(json, "\"preproduction\":[]"));
+    ASSERT_NOT_NULL(strstr(json, "\"production\":[]"));
+    ASSERT_NOT_NULL(strstr(json, "\"postproduction\":[]"));
+    ASSERT_NOT_NULL(strstr(json, "\"debt\":[]"));
+    ASSERT_NOT_NULL(strstr(json, "\"continue\":\"/gamedev-skill continue\""));
+    ASSERT_NULL(strstr(json, "has_more"));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_get_200_present_false_empty_arrays) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[8192];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT(http_write_project_db(fx.cache_dir, "alpha", fx.root_dir, NULL));
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_get(&ts, "alpha", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "\"gamedev_skill_present\":false"));
+    ASSERT_NOT_NULL(strstr(json, "\"inbox\":[]"));
+    ASSERT_NOT_NULL(strstr(json, "\"preproduction\":[]"));
+    ASSERT_NOT_NULL(strstr(json, "\"production\":[]"));
+    ASSERT_NOT_NULL(strstr(json, "\"postproduction\":[]"));
+    ASSERT_NOT_NULL(strstr(json, "\"debt\":[]"));
+    ASSERT_NULL(strstr(json, "has_more"));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_get_200_no_gamedev_field_when_gamedev_dir) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[65536];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_spec_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_NULL(strstr(json, "gamedev_skill_present"));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_get_404_unknown_project) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[4096];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_get(&ts, "missing", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 404);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"project not found\"}");
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_get_400_missing_project) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[4096];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_get(&ts, NULL, resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 400);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"missing project parameter\"}");
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_get_200_unconverted_inbox_epic) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[16384];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_inbox_grill(&fx), 0);
+    ASSERT_EQ(th_write_file(TH_PATH(fx.root_dir, ".gamedev/roadmap.md"), "no 001 cell\n"), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_INBOX_EPIC_ID, "\"kind\":\"epic\""));
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_INBOX_EPIC_ID, "\"title\":\"inbox\""));
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_INBOX_EPIC_ID, "\"summary\":\"Filter unread first.\""));
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_INBOX_EPIC_ID, "\"plan_title\":\"Inbox Plan\""));
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_INBOX_EPIC_ID, "\"track\":null"));
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_INBOX_EPIC_ID, "\"work_state\":null"));
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_INBOX_EPIC_ID, "\"owner\":\"\""));
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_INBOX_EPIC_ID, "\"continue\":\"/gamedev-skill continue\""));
+    ASSERT_NULL(strstr(json, "\"has_more\""));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_get_200_companion_to_omits_epic_bytes) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[16384];
+    const char *json;
+    char epic_path[1024];
+    char *before;
+    char *after;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_inbox_grill(&fx), 0);
+    ASSERT_EQ(th_write_file(TH_PATH(fx.root_dir, ".gamedev/phases/01-preproduction/gdd.md"),
+                            "Companion to: .grill/plans/inbox-plan/epics/epic-001-inbox.md\n"),
+              0);
+    snprintf(epic_path, sizeof(epic_path), "%s/.grill/plans/inbox-plan/epics/epic-001-inbox.md",
+             fx.root_dir);
+    before = th_read_file_alloc(epic_path);
+    ASSERT_NOT_NULL(before);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_FALSE(sb_json_obj_has(json, GB_HTTP_INBOX_EPIC_ID, "\"kind\":\"epic\""));
+
+    after = th_read_file_alloc(epic_path);
+    ASSERT_NOT_NULL(after);
+    ASSERT_STR_EQ(before, after);
+    free(before);
+    free(after);
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_get_200_leaves_skill_trees) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[16384];
+    char state_path[1024];
+    char index_path[1024];
+    char epic_path[1024];
+    char *state_before;
+    char *index_before;
+    char *epic_before;
+    char *state_after;
+    char *index_after;
+    char *epic_after;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_inbox_grill(&fx), 0);
+    ASSERT_EQ(th_write_file(TH_PATH(fx.root_dir, ".gamedev/state.md"),
+                            "phase=02-production focus=\"keep me\"\n"),
+              0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    snprintf(state_path, sizeof(state_path), "%s/.gamedev/state.md", fx.root_dir);
+    snprintf(index_path, sizeof(index_path), "%s/.grill/index.md", fx.root_dir);
+    snprintf(epic_path, sizeof(epic_path), "%s/.grill/plans/inbox-plan/epics/epic-001-inbox.md",
+             fx.root_dir);
+    state_before = th_read_file_alloc(state_path);
+    index_before = th_read_file_alloc(index_path);
+    epic_before = th_read_file_alloc(epic_path);
+    ASSERT_NOT_NULL(state_before);
+    ASSERT_NOT_NULL(index_before);
+    ASSERT_NOT_NULL(epic_before);
+
+    ASSERT_GT(ui_game_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+
+    state_after = th_read_file_alloc(state_path);
+    index_after = th_read_file_alloc(index_path);
+    epic_after = th_read_file_alloc(epic_path);
+    ASSERT_NOT_NULL(state_after);
+    ASSERT_NOT_NULL(index_after);
+    ASSERT_NOT_NULL(epic_after);
+    ASSERT_STR_EQ(state_before, state_after);
+    ASSERT_STR_EQ(index_before, index_after);
+    ASSERT_STR_EQ(epic_before, epic_after);
+    ASSERT_FALSE(cbm_is_dir(TH_PATH(fx.root_dir, ".sdd-skill")));
+    ASSERT_FALSE(cbm_file_exists(TH_PATH(fx.root_dir, ".sdd-skill")));
+    free(state_before);
+    free(index_before);
+    free(epic_before);
+    free(state_after);
+    free(index_after);
+    free(epic_after);
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_get_200_registry_in_progress_omits) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[16384];
+    const char *json;
+    char reg_path[1024];
+    char state_path[1024];
+    char index_path[1024];
+    char active_path[1024];
+    char *reg_before;
+    char *state_before;
+    char *index_before;
+    char *active_before;
+    char *reg_after;
+    char *state_after;
+    char *index_after;
+    char *active_after;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_inbox_grill(&fx), 0);
+    ASSERT_EQ(gb_http_seed_registry(&fx, "| 001 | inbox-plan | Inbox | o | in_progress |\n"), 0);
+    ASSERT_EQ(th_write_file(TH_PATH(fx.root_dir, ".gamedev/state.md"),
+                            "phase=02-production focus=\"keep me\"\n"),
+              0);
+    ASSERT_EQ(gb_http_seed_active_json(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    snprintf(reg_path, sizeof(reg_path), "%s/.gamedev/epics_registry.md", fx.root_dir);
+    snprintf(state_path, sizeof(state_path), "%s/.gamedev/state.md", fx.root_dir);
+    snprintf(index_path, sizeof(index_path), "%s/.grill/index.md", fx.root_dir);
+    snprintf(active_path, sizeof(active_path), "%s/.sdd-skill/specs/active.json", fx.root_dir);
+    reg_before = th_read_file_alloc(reg_path);
+    state_before = th_read_file_alloc(state_path);
+    index_before = th_read_file_alloc(index_path);
+    active_before = th_read_file_alloc(active_path);
+    ASSERT_NOT_NULL(reg_before);
+    ASSERT_NOT_NULL(state_before);
+    ASSERT_NOT_NULL(index_before);
+    ASSERT_NOT_NULL(active_before);
+
+    ASSERT_GT(ui_game_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_FALSE(sb_json_obj_has(json, GB_HTTP_INBOX_EPIC_ID, "\"kind\":\"epic\""));
+    ASSERT_NULL(strstr(json, GB_HTTP_INBOX_EPIC_ID));
+    ASSERT_NULL(strstr(json, "\"has_more\""));
+    ASSERT_NULL(strstr(json, "epics_registry"));
+    ASSERT_NULL(strstr(json, "\"registry\""));
+
+    reg_after = th_read_file_alloc(reg_path);
+    state_after = th_read_file_alloc(state_path);
+    index_after = th_read_file_alloc(index_path);
+    active_after = th_read_file_alloc(active_path);
+    ASSERT_NOT_NULL(reg_after);
+    ASSERT_NOT_NULL(state_after);
+    ASSERT_NOT_NULL(index_after);
+    ASSERT_NOT_NULL(active_after);
+    ASSERT_STR_EQ(reg_before, reg_after);
+    ASSERT_STR_EQ(state_before, state_after);
+    ASSERT_STR_EQ(index_before, index_after);
+    ASSERT_STR_EQ(active_before, active_after);
+    free(reg_before);
+    free(state_before);
+    free(index_before);
+    free(active_before);
+    free(reg_after);
+    free(state_after);
+    free(index_after);
+    free(active_after);
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_get_200_absent_registry_does_not_create) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[16384];
+    const char *json;
+    char *state_before;
+    char *index_before;
+    char *active_before;
+    char *state_after;
+    char *index_after;
+    char *active_after;
+    char state_path[1024];
+    char index_path[1024];
+    char active_path[1024];
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_inbox_grill(&fx), 0);
+    ASSERT_EQ(th_write_file(TH_PATH(fx.root_dir, ".gamedev/state.md"),
+                            "phase=02-production focus=\"keep me\"\n"),
+              0);
+    ASSERT_EQ(gb_http_seed_active_json(&fx), 0);
+    ASSERT_FALSE(cbm_file_exists(TH_PATH(fx.root_dir, ".gamedev/epics_registry.md")));
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    snprintf(state_path, sizeof(state_path), "%s/.gamedev/state.md", fx.root_dir);
+    snprintf(index_path, sizeof(index_path), "%s/.grill/index.md", fx.root_dir);
+    snprintf(active_path, sizeof(active_path), "%s/.sdd-skill/specs/active.json", fx.root_dir);
+    state_before = th_read_file_alloc(state_path);
+    index_before = th_read_file_alloc(index_path);
+    active_before = th_read_file_alloc(active_path);
+    ASSERT_NOT_NULL(state_before);
+    ASSERT_NOT_NULL(index_before);
+    ASSERT_NOT_NULL(active_before);
+
+    ASSERT_GT(ui_game_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_INBOX_EPIC_ID, "\"kind\":\"epic\""));
+    ASSERT_FALSE(cbm_file_exists(TH_PATH(fx.root_dir, ".gamedev/epics_registry.md")));
+    ASSERT_NULL(strstr(json, "\"has_more\""));
+    ASSERT_NULL(strstr(json, "epics_registry"));
+    ASSERT_NULL(strstr(json, "\"registry\""));
+
+    state_after = th_read_file_alloc(state_path);
+    index_after = th_read_file_alloc(index_path);
+    active_after = th_read_file_alloc(active_path);
+    ASSERT_NOT_NULL(state_after);
+    ASSERT_NOT_NULL(index_after);
+    ASSERT_NOT_NULL(active_after);
+    ASSERT_STR_EQ(state_before, state_after);
+    ASSERT_STR_EQ(index_before, index_after);
+    ASSERT_STR_EQ(active_before, active_after);
+    free(state_before);
+    free(index_before);
+    free(active_before);
+    free(state_after);
+    free(index_after);
+    free(active_after);
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_get_200_closed_registry_epic_still_listed) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[65536];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_inbox_grill(&fx), 0);
+    ASSERT_EQ(gb_http_seed_registry(&fx, "| 001 | inbox-plan | Inbox | o | closed |\n"), 0);
+    ASSERT_EQ(gb_http_seed_active_json(&fx), 0);
+    ASSERT_EQ(th_write_file(TH_PATH(fx.root_dir, ".sdd-skill/specs/spec-010-aaa-planned/spec.md"),
+                            "# Spec-010-aaa: Planned\n\nNo Companion-to grill path.\n"),
+              0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_spec_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_INBOX_EPIC_ID, "\"kind\":\"epic\""));
+    ASSERT_NULL(strstr(json, "gamedev_skill_present"));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_post_200_flag_object_and_idempotent) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[65536];
+    const char *json;
+    char *before;
+    char *after;
+    char *epic_before;
+    char *epic_after;
+    char audio_path[1024];
+    char epic_path[1024];
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_done_audio(&fx), 0);
+    ASSERT_EQ(gb_http_seed_inbox_grill(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    snprintf(audio_path, sizeof(audio_path), "%s/%s", fx.root_dir, GB_HTTP_AUDIO_ID);
+    snprintf(epic_path, sizeof(epic_path), "%s/%s", fx.root_dir, GB_HTTP_INBOX_EPIC_ID);
+    before = th_read_file_alloc(audio_path);
+    epic_before = th_read_file_alloc(epic_path);
+    ASSERT_NOT_NULL(before);
+    ASSERT_NOT_NULL(epic_before);
+
+    ASSERT_GT(ui_game_board_post(&ts,
+                                 "{\"project\":\"bevy\",\"card_id\":"
+                                 "\".gamedev/phases/01-preproduction/audio-direction.md\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "\"card_id\":\".gamedev/phases/01-preproduction/audio-direction.md\""));
+    ASSERT_NOT_NULL(strstr(json, "\"archived\":true"));
+    ASSERT_NULL(strstr(json, "gamedev_skill_present"));
+    ASSERT_NULL(strstr(json, "\"preproduction\""));
+
+    after = th_read_file_alloc(audio_path);
+    epic_after = th_read_file_alloc(epic_path);
+    ASSERT_NOT_NULL(after);
+    ASSERT_NOT_NULL(epic_after);
+    ASSERT_STR_EQ(before, after);
+    ASSERT_STR_EQ(epic_before, epic_after);
+    free(after);
+    free(epic_after);
+    ASSERT_FALSE(cbm_is_dir(TH_PATH(fx.root_dir, ".sdd-skill")));
+    ASSERT_FALSE(cbm_file_exists(TH_PATH(fx.root_dir, ".sdd-skill")));
+
+    ASSERT_GT(ui_game_board_post(&ts,
+                                 "{\"project\":\"bevy\",\"card_id\":"
+                                 "\".gamedev/phases/01-preproduction/audio-direction.md\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "\"archived\":true"));
+
+    ASSERT_GT(ui_game_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_AUDIO_ID, "\"archived\":true"));
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_AUDIO_ID, "\"work_state\":\"done\""));
+
+    after = th_read_file_alloc(audio_path);
+    epic_after = th_read_file_alloc(epic_path);
+    ASSERT_NOT_NULL(after);
+    ASSERT_NOT_NULL(epic_after);
+    ASSERT_STR_EQ(before, after);
+    ASSERT_STR_EQ(epic_before, epic_after);
+    free(after);
+    free(epic_after);
+    free(before);
+    free(epic_before);
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_post_404_inbox_epic) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[4096];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_inbox_grill(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_post(&ts,
+                                 "{\"project\":\"bevy\",\"card_id\":"
+                                 "\".grill/plans/inbox-plan/epics/epic-001-inbox.md\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 404);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"card not found\"}");
+    ASSERT_EQ(gb_http_archive_has_id(&fx, GB_HTTP_INBOX_EPIC_ID), 0);
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_get_merges_leftover_orphan) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[65536];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_pending_gdd(&fx), 0);
+    ASSERT_EQ(gb_http_seed_flag(&fx, GB_HTTP_GDD_ID, 1), CBM_STORE_OK);
+    ASSERT_EQ(gb_http_seed_flag(&fx, GB_HTTP_ORPHAN_ID, 1), CBM_STORE_OK);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_GDD_ID, "\"work_state\":\"pending\""));
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_GDD_ID, "\"archived\":true"));
+    ASSERT_NULL(strstr(json, GB_HTTP_ORPHAN_ID));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_post_409_pending_writes_nothing) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[65536];
+    const char *json;
+    char *before;
+    char *after;
+    char gdd_path[1024];
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_pending_gdd(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    snprintf(gdd_path, sizeof(gdd_path), "%s/%s", fx.root_dir, GB_HTTP_GDD_ID);
+    before = th_read_file_alloc(gdd_path);
+    ASSERT_NOT_NULL(before);
+
+    ASSERT_GT(ui_game_board_post(&ts,
+                                 "{\"project\":\"bevy\",\"card_id\":"
+                                 "\".gamedev/phases/01-preproduction/gdd.md\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 409);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"card not done\"}");
+
+    after = th_read_file_alloc(gdd_path);
+    ASSERT_NOT_NULL(after);
+    ASSERT_STR_EQ(before, after);
+    free(before);
+    free(after);
+    ASSERT_EQ(gb_http_archive_has_id(&fx, GB_HTTP_GDD_ID), 0);
+
+    ASSERT_GT(ui_game_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_GDD_ID, "\"archived\":false"));
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_GDD_ID, "\"work_state\":\"pending\""));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_post_409_blocked_overlay) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[4096];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_sys_done(&fx), 0);
+    ASSERT_EQ(gb_http_seed_blocked_state(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_post(&ts,
+                                 "{\"project\":\"bevy\",\"card_id\":"
+                                 "\".gamedev/phases/02-production/systems/SYS-001-movement\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 409);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"card not done\"}");
+    ASSERT_EQ(gb_http_archive_has_id(&fx, GB_HTTP_SYS_ID), 0);
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_post_404_unknown_card) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[4096];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_post(&ts,
+                                 "{\"project\":\"bevy\",\"card_id\":"
+                                 "\".gamedev/phases/01-preproduction/nope.md\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 404);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"card not found\"}");
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_post_400_missing_project) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[4096];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_post(&ts,
+                                 "{\"card_id\":\".gamedev/phases/01-preproduction/"
+                                 "audio-direction.md\",\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 400);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "\"error\""));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_post_400_invalid_archived) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[4096];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_post(&ts,
+                                 "{\"project\":\"bevy\",\"card_id\":"
+                                 "\".gamedev/phases/01-preproduction/audio-direction.md\","
+                                 "\"archived\":\"yes\"}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 400);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"invalid archived\"}");
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_post_404_unknown_project) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[4096];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_post(&ts,
+                                 "{\"project\":\"missing-proj\",\"card_id\":"
+                                 "\".gamedev/phases/01-preproduction/audio-direction.md\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 404);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"project not found\"}");
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_post_game_card_id_does_not_archive) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[65536];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_done_audio(&fx), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_spec_board_post(&ts,
+                                 "{\"project\":\"bevy\",\"spec_id\":"
+                                 "\".gamedev/phases/01-preproduction/audio-direction.md\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 404);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"spec not found\"}");
+    ASSERT_EQ(gb_http_archive_has_id(&fx, GB_HTTP_AUDIO_ID), 0);
+
+    ASSERT_GT(ui_game_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_TRUE(sb_json_obj_has(json, GB_HTTP_AUDIO_ID, "\"archived\":false"));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(pipeline_publish_staged_copies_spec_archive) {
+    char *td = th_mktempdir("cbm_pub_arch");
+    char live[512];
+    char stage[512];
+    cbm_store_t *st;
+    cbm_pipeline_generation_t gen;
+    char *stage_owned;
+    cbm_spec_archive_row_t rows[CBM_SPEC_ARCHIVE_CAP];
+    int n = 0;
+
+    ASSERT_NOT_NULL(td);
+    snprintf(live, sizeof(live), "%s/final.db", td);
+    snprintf(stage, sizeof(stage), "%s/stage.db", td);
+
+    st = cbm_store_open_path(live);
+    ASSERT_NOT_NULL(st);
+    ASSERT_EQ(cbm_store_upsert_project(st, "pubarch", td), CBM_STORE_OK);
+    ASSERT_EQ(cbm_store_spec_archive_set(st, "spec-012-ccc-closed", 1), CBM_STORE_OK);
+    cbm_store_close(st);
+
+    st = cbm_store_open_path(stage);
+    ASSERT_NOT_NULL(st);
+    ASSERT_EQ(cbm_store_upsert_project(st, "pubarch", td), CBM_STORE_OK);
+    cbm_store_close(st);
+
+    memset(&gen, 0, sizeof(gen));
+    gen.final_db_path = live;
+    gen.project = "pubarch";
+    gen.surfaces_in_place = true;
+
+    stage_owned = strdup(stage);
+    ASSERT_NOT_NULL(stage_owned);
+    ASSERT_EQ(cbm_pipeline_publish_staged(stage_owned, &gen, false, true), 0);
+
+    st = cbm_store_open_path_query(live);
+    ASSERT_NOT_NULL(st);
+    ASSERT_EQ(cbm_store_spec_archive_load(st, rows, CBM_SPEC_ARCHIVE_CAP, &n), CBM_STORE_OK);
+    ASSERT_EQ(n, 1);
+    ASSERT_STR_EQ(rows[0].spec_id, "spec-012-ccc-closed");
+    ASSERT_EQ(rows[0].archived, 1);
+    cbm_store_close(st);
+    th_rmtree(td);
+    PASS();
+}
+
+TEST(pipeline_publish_staged_copies_game_archive) {
+    char *td = th_mktempdir("cbm_pub_game_arch");
+    char live[512];
+    char stage[512];
+    cbm_store_t *st;
+    cbm_pipeline_generation_t gen;
+    char *stage_owned;
+    cbm_game_archive_row_t rows[16];
+    int n = 0;
+
+    ASSERT_NOT_NULL(td);
+    snprintf(live, sizeof(live), "%s/final.db", td);
+    snprintf(stage, sizeof(stage), "%s/stage.db", td);
+
+    st = cbm_store_open_path(live);
+    ASSERT_NOT_NULL(st);
+    ASSERT_EQ(cbm_store_upsert_project(st, "pubgarch", td), CBM_STORE_OK);
+    ASSERT_EQ(cbm_store_game_archive_set(st, GB_HTTP_AUDIO_ID, 1), CBM_STORE_OK);
+    cbm_store_close(st);
+
+    st = cbm_store_open_path(stage);
+    ASSERT_NOT_NULL(st);
+    ASSERT_EQ(cbm_store_upsert_project(st, "pubgarch", td), CBM_STORE_OK);
+    cbm_store_close(st);
+
+    memset(&gen, 0, sizeof(gen));
+    gen.final_db_path = live;
+    gen.project = "pubgarch";
+    gen.surfaces_in_place = true;
+
+    stage_owned = strdup(stage);
+    ASSERT_NOT_NULL(stage_owned);
+    ASSERT_EQ(cbm_pipeline_publish_staged(stage_owned, &gen, false, true), 0);
+
+    st = cbm_store_open_path_query(live);
+    ASSERT_NOT_NULL(st);
+    ASSERT_EQ(cbm_store_game_archive_load(st, rows, 16, &n), CBM_STORE_OK);
+    ASSERT_EQ(n, 1);
+    ASSERT_STR_EQ(rows[0].card_id, GB_HTTP_AUDIO_ID);
+    ASSERT_EQ(rows[0].archived, 1);
+    cbm_store_close(st);
+    th_rmtree(td);
+    PASS();
+}
+
+TEST(ui_game_board_get_200_open_comment_debt) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[16384];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_backlog(&fx, "<!-- debt:gate-preproduction missing GDD lock "
+                                       "\xe2\x80\x94 director \xe2\x80\x94 M1 -->\n"),
+              0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_EQ(sb_json_debt_len(json), 1);
+    ASSERT_NOT_NULL(strstr(json, "\"id\":\"debt:gate-preproduction\""));
+    ASSERT_NOT_NULL(strstr(json, "\"title\":\"missing GDD lock\""));
+    ASSERT_NULL(strstr(json, "has_more"));
+    ASSERT_NULL(strstr(json, "\"severity\""));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_get_200_17th_debt_omitted) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[32768];
+    const char *json;
+    char body[2048];
+    int i;
+    int n = 0;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    body[0] = '\0';
+    for (i = 1; i <= 17; i++) {
+        n += snprintf(body + n, sizeof(body) - (size_t)n, "- debt:d%02d item %d\n", i, i);
+        ASSERT_TRUE(n > 0 && n < (int)sizeof(body));
+    }
+    ASSERT_EQ(gb_http_seed_backlog(&fx, body), 0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_EQ(sb_json_debt_len(json), 16);
+    ASSERT_NULL(strstr(json, "debt:d17"));
+    ASSERT_NULL(strstr(json, "has_more"));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_get_200_debt_registry_hide_unchanged) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[16384];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_inbox_grill(&fx), 0);
+    ASSERT_EQ(gb_http_seed_registry(&fx, "| 001 | inbox-plan | Inbox | o | in_progress |\n"), 0);
+    ASSERT_EQ(gb_http_seed_backlog(&fx, "<!-- debt:gate-preproduction missing GDD lock "
+                                       "\xe2\x80\x94 director \xe2\x80\x94 M1 -->\n"),
+              0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_NULL(strstr(json, GB_HTTP_INBOX_EPIC_ID));
+    ASSERT_EQ(sb_json_debt_len(json), 1);
+    ASSERT_NOT_NULL(strstr(json, "\"id\":\"debt:gate-preproduction\""));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_get_200_debt_from_tech_debt_not_backlog) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[65536];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    ASSERT_EQ(sb_http_seed_tech_debt(&fx, "## TD-005: leftover cache\nStatus: identified\n"), 0);
+    ASSERT_EQ(th_mkdir_p(TH_PATH(fx.root_dir, ".gamedev")), 0);
+    ASSERT_EQ(gb_http_seed_backlog(&fx, "<!-- debt:gate-preproduction missing GDD lock "
+                                       "\xe2\x80\x94 director \xe2\x80\x94 M1 -->\n"),
+              0);
+    ASSERT_TRUE(cbm_file_exists(TH_PATH(fx.root_dir, ".gamedev/backlog.md")));
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_spec_board_get(&ts, "alpha", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_EQ(sb_json_debt_len(json), 1);
+    ASSERT_NOT_NULL(strstr(json, "\"id\":\"TD-005\""));
+    ASSERT_NULL(strstr(json, "debt:gate-preproduction"));
+    ASSERT_NULL(strstr(json, "gamedev_skill_present"));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_spec_board_get_200_without_backlog_still_tech_debt) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[65536];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(sb_http_seed_board(&fx), 0);
+    ASSERT_EQ(sb_http_seed_tech_debt(&fx, "## TD-005: leftover cache\nStatus: identified\n"), 0);
+    ASSERT_FALSE(cbm_file_exists(TH_PATH(fx.root_dir, ".gamedev/backlog.md")));
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_spec_board_get(&ts, "alpha", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_EQ(sb_json_debt_len(json), 1);
+    ASSERT_NOT_NULL(strstr(json, "\"id\":\"TD-005\""));
+    ASSERT_FALSE(cbm_file_exists(TH_PATH(fx.root_dir, ".gamedev/backlog.md")));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_get_200_leaves_backlog_does_not_create) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[16384];
+    const char *json;
+    char backlog_path[1024];
+    char state_path[1024];
+    char reg_path[1024];
+    char index_path[1024];
+    char *backlog_before;
+    char *state_before;
+    char *reg_before;
+    char *index_before;
+    char *backlog_after;
+    char *state_after;
+    char *reg_after;
+    char *index_after;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_inbox_grill(&fx), 0);
+    ASSERT_EQ(gb_http_seed_registry(&fx, "| 001 | inbox-plan | Inbox | o | not_started |\n"), 0);
+    ASSERT_EQ(th_write_file(TH_PATH(fx.root_dir, ".gamedev/state.md"),
+                            "phase=02-production focus=\"keep me\"\n"),
+              0);
+    ASSERT_EQ(gb_http_seed_backlog(&fx, "<!-- debt:gate-preproduction missing GDD lock "
+                                       "\xe2\x80\x94 director \xe2\x80\x94 M1 -->\n"),
+              0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    snprintf(backlog_path, sizeof(backlog_path), "%s/.gamedev/backlog.md", fx.root_dir);
+    snprintf(state_path, sizeof(state_path), "%s/.gamedev/state.md", fx.root_dir);
+    snprintf(reg_path, sizeof(reg_path), "%s/.gamedev/epics_registry.md", fx.root_dir);
+    snprintf(index_path, sizeof(index_path), "%s/.grill/index.md", fx.root_dir);
+    backlog_before = th_read_file_alloc(backlog_path);
+    state_before = th_read_file_alloc(state_path);
+    reg_before = th_read_file_alloc(reg_path);
+    index_before = th_read_file_alloc(index_path);
+    ASSERT_NOT_NULL(backlog_before);
+    ASSERT_NOT_NULL(state_before);
+    ASSERT_NOT_NULL(reg_before);
+    ASSERT_NOT_NULL(index_before);
+
+    ASSERT_GT(ui_game_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_EQ(sb_json_debt_len(json), 1);
+
+    backlog_after = th_read_file_alloc(backlog_path);
+    state_after = th_read_file_alloc(state_path);
+    reg_after = th_read_file_alloc(reg_path);
+    index_after = th_read_file_alloc(index_path);
+    ASSERT_NOT_NULL(backlog_after);
+    ASSERT_NOT_NULL(state_after);
+    ASSERT_NOT_NULL(reg_after);
+    ASSERT_NOT_NULL(index_after);
+    ASSERT_STR_EQ(backlog_before, backlog_after);
+    ASSERT_STR_EQ(state_before, state_after);
+    ASSERT_STR_EQ(reg_before, reg_after);
+    ASSERT_STR_EQ(index_before, index_after);
+    ASSERT_FALSE(cbm_file_exists(TH_PATH(fx.root_dir, ".sdd-skill")));
+    free(backlog_before);
+    free(state_before);
+    free(reg_before);
+    free(index_before);
+    free(backlog_after);
+    free(state_after);
+    free(reg_after);
+    free(index_after);
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_get_200_absent_backlog_does_not_create) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[16384];
+    const char *json;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_FALSE(cbm_file_exists(TH_PATH(fx.root_dir, ".gamedev/backlog.md")));
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    ASSERT_GT(ui_game_board_get(&ts, "bevy", resp, sizeof(resp)), 0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "\"debt\":[]"));
+    ASSERT_FALSE(cbm_file_exists(TH_PATH(fx.root_dir, ".gamedev/backlog.md")));
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_post_200_archive_leaves_backlog) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[65536];
+    const char *json;
+    char backlog_path[1024];
+    char *backlog_before;
+    char *backlog_after;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_done_audio(&fx), 0);
+    ASSERT_EQ(gb_http_seed_backlog(&fx, "<!-- debt:gate-preproduction missing GDD lock "
+                                       "\xe2\x80\x94 director \xe2\x80\x94 M1 -->\n"),
+              0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    snprintf(backlog_path, sizeof(backlog_path), "%s/.gamedev/backlog.md", fx.root_dir);
+    backlog_before = th_read_file_alloc(backlog_path);
+    ASSERT_NOT_NULL(backlog_before);
+
+    ASSERT_GT(ui_game_board_post(&ts,
+                                 "{\"project\":\"bevy\",\"card_id\":"
+                                 "\".gamedev/phases/01-preproduction/audio-direction.md\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 200);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "\"archived\":true"));
+
+    backlog_after = th_read_file_alloc(backlog_path);
+    ASSERT_NOT_NULL(backlog_after);
+    ASSERT_STR_EQ(backlog_before, backlog_after);
+    free(backlog_before);
+    free(backlog_after);
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
+TEST(ui_game_board_post_404_debt_id_not_archive_target) {
+    ui_delete_fixture_t fx;
+    th_server_t ts;
+    char resp[4096];
+    const char *json;
+    char backlog_path[1024];
+    char *backlog_before;
+    char *backlog_after;
+
+    ASSERT_EQ(ui_delete_fixture_init(&fx), 0);
+    ASSERT_EQ(gb_http_seed_bevy(&fx), 0);
+    ASSERT_EQ(gb_http_seed_backlog(&fx, "<!-- debt:gate-preproduction missing GDD lock "
+                                       "\xe2\x80\x94 director \xe2\x80\x94 M1 -->\n"),
+              0);
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    snprintf(backlog_path, sizeof(backlog_path), "%s/.gamedev/backlog.md", fx.root_dir);
+    backlog_before = th_read_file_alloc(backlog_path);
+    ASSERT_NOT_NULL(backlog_before);
+
+    ASSERT_GT(ui_game_board_post(&ts,
+                                 "{\"project\":\"bevy\",\"card_id\":\"debt:gate-preproduction\","
+                                 "\"archived\":true}",
+                                 resp, sizeof(resp)),
+              0);
+    ASSERT_EQ(th_status(resp), 404);
+    json = th_http_json(resp);
+    ASSERT_NOT_NULL(json);
+    ASSERT_STR_EQ(json, "{\"error\":\"card not found\"}");
+    ASSERT_EQ(gb_http_archive_has_id(&fx, "debt:gate-preproduction"), 0);
+
+    backlog_after = th_read_file_alloc(backlog_path);
+    ASSERT_NOT_NULL(backlog_after);
+    ASSERT_STR_EQ(backlog_before, backlog_after);
+    free(backlog_before);
+    free(backlog_after);
+
+    th_server_stop(&ts);
+    ui_delete_fixture_cleanup(&fx);
+    PASS();
+}
+
 /* ── Suite ────────────────────────────────────────────────────── */
 
 SUITE(httpd) {
@@ -2292,6 +5997,13 @@ SUITE(httpd) {
     RUN_TEST(ui_server_unknown_path_404);
     RUN_TEST(ui_server_process_kill_route_is_unavailable);
     RUN_TEST(ui_server_routes_indexing_through_joinable_daemon_executor);
+    RUN_TEST(ui_index_owned_path_is_409_path_exists);
+    RUN_TEST(ui_index_trailing_slash_is_409_path_exists);
+    RUN_TEST(ui_index_derived_name_other_path_is_409_name_exists);
+    RUN_TEST(ui_index_reindex_project_is_202);
+    RUN_TEST(ui_index_reindex_project_name_alias_is_202);
+    RUN_TEST(ui_index_tie_existing_project_is_greater_name);
+    RUN_TEST(ui_index_inflight_second_create_is_409);
     RUN_TEST(ui_server_free_never_joins_active_index_worker);
     RUN_TEST(ui_server_root_without_embedded_assets_is_not_found);
     RUN_TEST(ui_server_same_origin_request_is_allowed);
@@ -2304,6 +6016,68 @@ SUITE(httpd) {
     RUN_TEST(ui_server_browse_traversal_probe);
     RUN_TEST(ui_server_adr_mutation_guard_busy_preserves_existing_adr);
     RUN_TEST(ui_server_adr_mutation_guard_balances_success);
+    RUN_TEST(ui_index_reindex_fills_adr_and_migrates_unmarked);
+    RUN_TEST(ui_index_create_fills_generated_empty_manual);
+    RUN_TEST(ui_index_no_sdd_skill_leaves_adr_unmarked);
+    RUN_TEST(ui_index_partial_context_ai_job_succeeds);
+    RUN_TEST(ui_index_unreadable_architecture_omits_extract);
+    RUN_TEST(ui_adr_generated_hand_edit_replaced_on_reindex);
+    RUN_TEST(ui_adr_post_body_max_32768);
+    RUN_TEST(ui_index_reindex_fills_gamedev_omits_leftover_sdd);
+    RUN_TEST(ui_index_create_gamedev_fills_generated_empty_manual);
+    RUN_TEST(ui_index_add_gamedev_overwrites_sdd_keeps_manual);
+    RUN_TEST(ui_index_gamedev_only_tech_stack_no_sdd_fallback);
+    RUN_TEST(ui_index_empty_gamedev_dir_no_sdd_fallback);
+    RUN_TEST(ui_index_remove_gamedev_restores_sdd);
+    RUN_TEST(ui_index_both_skill_dirs_gone_leaves_last_blob);
+    RUN_TEST(ui_index_unreadable_game_context_omits_purpose);
+    RUN_TEST(ui_adr_gamedev_generated_hand_edit_replaced_on_reindex);
+    RUN_TEST(ui_spec_board_get_merges_done_orphan_leftover_todo);
+    RUN_TEST(ui_spec_board_post_200_flag_object_and_idempotent);
+    RUN_TEST(ui_spec_board_post_409_todo_writes_nothing);
+    RUN_TEST(ui_spec_board_post_404_unknown_spec);
+    RUN_TEST(ui_spec_board_post_400_missing_project);
+    RUN_TEST(ui_spec_board_post_400_invalid_archived);
+    RUN_TEST(ui_spec_board_post_404_unknown_project);
+    RUN_TEST(ui_spec_board_post_423_busy);
+    RUN_TEST(ui_spec_board_get_200_mixed_todo_grill_epics);
+    RUN_TEST(ui_spec_board_post_404_epic_id_writes_nothing);
+    RUN_TEST(ui_spec_board_get_404_unknown_project);
+    RUN_TEST(ui_spec_board_get_200_leaves_skill_trees);
+    RUN_TEST(ui_spec_board_get_200_open_heading_debt);
+    RUN_TEST(ui_spec_board_get_200_17th_debt_omitted);
+    RUN_TEST(ui_game_board_get_200_present_true_empty_arrays);
+    RUN_TEST(ui_game_board_get_200_present_false_empty_arrays);
+    RUN_TEST(ui_spec_board_get_200_no_gamedev_field_when_gamedev_dir);
+    RUN_TEST(ui_game_board_get_404_unknown_project);
+    RUN_TEST(ui_game_board_get_400_missing_project);
+    RUN_TEST(ui_game_board_get_200_unconverted_inbox_epic);
+    RUN_TEST(ui_game_board_get_200_companion_to_omits_epic_bytes);
+    RUN_TEST(ui_game_board_get_200_leaves_skill_trees);
+    RUN_TEST(ui_game_board_get_200_registry_in_progress_omits);
+    RUN_TEST(ui_game_board_get_200_absent_registry_does_not_create);
+    RUN_TEST(ui_spec_board_get_200_closed_registry_epic_still_listed);
+    RUN_TEST(ui_game_board_post_200_flag_object_and_idempotent);
+    RUN_TEST(ui_game_board_post_404_inbox_epic);
+    RUN_TEST(ui_game_board_get_merges_leftover_orphan);
+    RUN_TEST(ui_game_board_post_409_pending_writes_nothing);
+    RUN_TEST(ui_game_board_post_409_blocked_overlay);
+    RUN_TEST(ui_game_board_post_404_unknown_card);
+    RUN_TEST(ui_game_board_post_400_missing_project);
+    RUN_TEST(ui_game_board_post_400_invalid_archived);
+    RUN_TEST(ui_game_board_post_404_unknown_project);
+    RUN_TEST(ui_game_board_get_200_open_comment_debt);
+    RUN_TEST(ui_game_board_get_200_17th_debt_omitted);
+    RUN_TEST(ui_game_board_get_200_debt_registry_hide_unchanged);
+    RUN_TEST(ui_spec_board_get_200_debt_from_tech_debt_not_backlog);
+    RUN_TEST(ui_spec_board_get_200_without_backlog_still_tech_debt);
+    RUN_TEST(ui_game_board_get_200_leaves_backlog_does_not_create);
+    RUN_TEST(ui_game_board_get_200_absent_backlog_does_not_create);
+    RUN_TEST(ui_game_board_post_200_archive_leaves_backlog);
+    RUN_TEST(ui_game_board_post_404_debt_id_not_archive_target);
+    RUN_TEST(ui_spec_board_post_game_card_id_does_not_archive);
+    RUN_TEST(pipeline_publish_staged_copies_spec_archive);
+    RUN_TEST(pipeline_publish_staged_copies_game_archive);
     RUN_TEST(ui_server_delete_mutation_guard_busy_preserves_project);
     RUN_TEST(ui_server_delete_mutation_guard_balances_success);
     RUN_TEST(ui_server_delete_project_unwatches_after_delete);

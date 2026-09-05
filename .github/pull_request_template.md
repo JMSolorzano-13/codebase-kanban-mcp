@@ -4,8 +4,6 @@
 
 ## Checklist
 
-- [ ] Every commit is signed off (`git commit -s`) — required, CI rejects
-      unsigned commits ([DCO](../DCO), see [CONTRIBUTING.md](../CONTRIBUTING.md))
-- [ ] Tests pass locally (`make -f Makefile.cbm test`)
+- [ ] Tests pass locally (`make -f Makefile.cbm test` and/or `cd graph-ui && npm test`)
 - [ ] Lint passes (`make -f Makefile.cbm lint-ci`)
-- [ ] New behavior is covered by a test (reproduce-first for bug fixes)
+- [ ] New behavior is covered by a test

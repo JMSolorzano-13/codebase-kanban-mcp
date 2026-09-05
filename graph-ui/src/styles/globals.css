@@ -1,11 +1,11 @@
 @import "tailwindcss";
 
 /*
- * @sdd-task: Task #2 - Grayscale chrome tokens + palette lock
- * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
- * @sdd-decision: SDD-ADR-005 - Chrome grayscale; lock colorForLabel and EdgeLines hex
- * @sdd-why: TD-004 teal primary painted chrome; graph palette stays categorical
- * @human-debug: If chrome looks teal → --color-primary still old accent; if galaxy gray → colorForLabel imported CSS vars
+ * @sdd-task: Task #3 - SpecBoardTab EpicCard + Todo epics-then-specs
+ * @sdd-spec: specs/spec-008-g8r-grill-epic-todo/spec.md
+ * @sdd-decision: SDD-ADR-038 - Epic mark E uses --color-epic-mark #7d8ec9
+ * @sdd-why: One chrome chromatic exception for letter E; graph/health hex stay locked
+ * @human-debug: If E is gray → token missing from @theme; if Function nodes periwinkle → colors.ts was edited
  */
 
 @theme inline {
@@ -25,6 +25,7 @@
   --color-accent-foreground: #e5e5e5;
   --color-destructive: #e05252;
   --color-destructive-foreground: #0a0a0a;
+  --color-epic-mark: #7d8ec9;
   --color-border: #404040;
   --color-input: #26262680;
   --color-ring: #a3a3a3;

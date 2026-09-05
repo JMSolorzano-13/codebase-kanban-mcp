@@ -48,8 +48,14 @@ static const char *ALWAYS_SKIP_DIRS[] = {
     ".ccls-cache", ".clangd", "elm-stuff", "_opam", ".cpcache", ".shadow-cljs",
     /* Deploy */
     ".vercel", ".netlify", "deploy", "deployed",
-    /* Misc */
-    ".codebase-memory", ".qdrant_code_embeddings", ".tmp", "vendor", "vendored", NULL};
+    /* Misc — `.sdd-skill` is cycle memory (SDD-ADR-023); fill reads trio via fopen
+     * @sdd-task: Task #2 - Pipeline hook + `.sdd-skill` skip
+     * @sdd-spec: specs/spec-004-j8k-adr-parse-on-reindex/spec.md
+     * @sdd-decision: SDD-ADR-023 ALWAYS_SKIP; fill is out-of-graph fopen
+     * @sdd-why: Trio .md must not become graph File nodes
+     * @human-debug: Trio as File nodes → `.sdd-skill` missing here; skip is dirname at :351 */
+    ".codebase-memory", ".sdd-skill", ".qdrant_code_embeddings", ".tmp", "vendor", "vendored",
+    NULL};
 
 static const char *FAST_SKIP_DIRS[] = {
     "generated", "gen",           "auto-generated", "fixtures",     "testdata",    "test_data",

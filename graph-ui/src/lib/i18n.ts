@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #5 - Dashboard Reindex + i18n + remaining Gherkin
- * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
- * @sdd-decision: SDD-ADR-015 - HTTP project is reindex; UI copy must not invent project_name
- * @sdd-why: US-007 accessible name Reindex + 500 error; US-001/006 notice and name_exists stay en+zh
- * @human-debug: If getByRole Reindex fails → messages.en.projects.reindex is not exactly "Reindex"
+ * @sdd-task: Task #3 - SpecBoardTab strip + EpicCard wrap + i18n
+ * @sdd-spec: specs/spec-015-s5k-specs-debt-and-path/spec.md
+ * @sdd-decision: SDD-ADR-067 - Specs-only debt strip; aria-label; dead text
+ * @sdd-why: specBoard.openTechDebt en "Open tech debt"; region aria-label only
+ * @human-debug: If region name fails → openTechDebt drifted from "Open tech debt"
  */
 import { useEffect, useState } from "react";
 
@@ -15,6 +15,7 @@ export const messages = {
       specs: "Specs",
       graph: "Graph",
       adr: "ADR",
+      game: "Game",
       projects: "Projects",
       control: "Control",
     },
@@ -77,6 +78,9 @@ export const messages = {
     adr: {
       title: "Architecture Decision Record",
       lastUpdated: "Last updated",
+      generatedAt: "Generated at",
+      replaceWarning:
+        "Edits inside the generated region are replaced on the next user-triggered index.",
       saveSuccess: "ADR saved",
       saveError: "Failed to save ADR",
       unsavedConfirm: "You have unsaved ADR changes. Leave without saving?",
@@ -107,6 +111,27 @@ export const messages = {
       checklistLabel: "Checklist",
       noTasksYet: "No tasks planned yet",
       noSpecs: "No specs yet",
+      archive: "Archive",
+      unarchive: "Unarchive",
+      showArchived: "Show archived",
+      openTechDebt: "Open tech debt",
+    },
+    gameBoard: {
+      stateMdMissing: "state.md missing",
+      phasePreproduction: "Pre-production",
+      phaseProduction: "Production",
+      phasePostproduction: "Post-production & Launch",
+      columnInbox: "Inbox",
+      workStatePending: "Pending",
+      workStateInProgress: "In progress",
+      workStateDone: "Done",
+      workStateBlocked: "Blocked",
+      inputs: "Inputs",
+      blockedStrip: "Blocked",
+      showDones: "Show Dones",
+      trackA: "Track A",
+      trackB: "Track B",
+      trackAll: "All",
     },
   },
   zh: {
@@ -114,6 +139,7 @@ export const messages = {
       specs: "规格",
       graph: "图谱",
       adr: "架构决策",
+      game: "游戏",
       projects: "项目",
       control: "控制",
     },
@@ -176,6 +202,8 @@ export const messages = {
     adr: {
       title: "架构决策记录",
       lastUpdated: "最后更新",
+      generatedAt: "生成于",
+      replaceWarning: "生成区域内的编辑会在下一次用户触发的索引时被替换。",
       saveSuccess: "架构决策已保存",
       saveError: "保存架构决策失败",
       unsavedConfirm: "架构决策有未保存的更改。确定不保存并离开？",
@@ -206,6 +234,27 @@ export const messages = {
       checklistLabel: "检查清单",
       noTasksYet: "尚未规划任务",
       noSpecs: "暂无规格",
+      archive: "归档",
+      unarchive: "取消归档",
+      showArchived: "显示已归档",
+      openTechDebt: "未解决的技术债",
+    },
+    gameBoard: {
+      stateMdMissing: "缺少 state.md",
+      phasePreproduction: "前期制作",
+      phaseProduction: "制作",
+      phasePostproduction: "后期制作与发行",
+      columnInbox: "收件箱",
+      workStatePending: "待处理",
+      workStateInProgress: "进行中",
+      workStateDone: "已完成",
+      workStateBlocked: "已阻塞",
+      inputs: "输入",
+      blockedStrip: "已阻塞",
+      showDones: "显示已完成",
+      trackA: "轨道 A",
+      trackB: "轨道 B",
+      trackAll: "全部",
     },
   },
 } as const;

@@ -1,20 +1,22 @@
 /**
- * @sdd-task: Task #4 - Create modal path_exists redirect + notice
- * @sdd-spec: specs/spec-003-h7q-path-project-identity/spec.md
- * @sdd-decision: SDD-ADR-015 - 409 path_exists opens Graph; name_exists stays in the modal
- * @sdd-why: US-001 redirect + status notice; notice clears on the next navigate
- * @human-debug: If 409 path_exists stays on Dashboard → line 142 (onPathExists); if notice survives leave → line 44 (navigate did not clear pathNotice)
+ * @sdd-task: Task #5 - Archive UI + refresh + remaining Vitest
+ * @sdd-spec: specs/spec-012-m2k-game-expand-archive-deps/spec.md
+ * @sdd-decision: SDD-ADR-054
+ * @sdd-why: pass project + refresh into GameBoardTab; keep one-shot settled gate
+ * @human-debug: If Archive POST has empty project → GameBoardTab not given selectedProject; if Game unmounts after Archive → refresh unset settled
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AdrTab } from "./components/AdrTab";
 import { Dashboard } from "./components/Dashboard";
+import { GameBoardTab } from "./components/GameBoardTab";
 import { GraphTab } from "./components/GraphTab";
 import { SpecBoardTab } from "./components/SpecBoardTab";
 import { WorkspaceHeader } from "./components/WorkspaceHeader";
 import { WorkspaceTabStrip } from "./components/WorkspaceTabStrip";
+import { useGameBoard } from "./hooks/useGameBoard";
 import { useSddSkillPresent } from "./hooks/useSddSkillPresent";
 import { useUiMessages } from "./lib/i18n";
-import { fallbackSpecsToGraph, readRoute, routeUrl, type RouteState } from "./lib/route";
+import { readRoute, resolveWorkspaceTab, routeUrl, type RouteState } from "./lib/route";
 import { isWorkspaceTab, type TabId, type WorkspaceTabId } from "./lib/types";
 
 export function App() {
@@ -24,7 +26,18 @@ export function App() {
   const [pathNotice, setPathNotice] = useState<string | null>(null);
   const { tab: activeTab, project: selectedProject } = route;
   const inWorkspace = Boolean(selectedProject) && isWorkspaceTab(activeTab);
-  const { present } = useSddSkillPresent(inWorkspace ? selectedProject : null);
+  const { present: specsPresent } = useSddSkillPresent(inWorkspace ? selectedProject : null);
+  const {
+    settled: gameSettled,
+    present: gamePresent,
+    board: gameBoard,
+    refresh: refreshGameBoard,
+  } = useGameBoard(inWorkspace ? selectedProject : null);
+  const showGame = gameSettled && gamePresent;
+  const showSpecs = gameSettled && !showGame && specsPresent;
+  /* Capture inbound tab=game / tab=specs before omit-until-true rewrites the URL. */
+  const pendingGameDeepLink = useRef(readRoute().tab === "game");
+  const pendingSpecsDeepLink = useRef(readRoute().tab === "specs");
 
   useEffect(() => {
     const initial = readRoute();
@@ -67,13 +80,36 @@ export function App() {
     setRoute({ tab, project });
   }, []);
 
-  /* Omit-until-true: specs URL becomes graph immediately, including while loading. */
+  /* Omit-until-true uses settled-aware flags. Inbound tab=game restores like specs.
+   * Inbound tab=specs + showGame replaces to game (not Specs). */
   useEffect(() => {
     if (!selectedProject || !isWorkspaceTab(activeTab)) return;
-    const next = fallbackSpecsToGraph(activeTab, present);
+    if (showGame && pendingGameDeepLink.current) {
+      pendingGameDeepLink.current = false;
+      pendingSpecsDeepLink.current = false;
+      if (activeTab !== "game") {
+        replaceRoute("game", selectedProject);
+        return;
+      }
+    }
+    if (showGame && pendingSpecsDeepLink.current) {
+      pendingSpecsDeepLink.current = false;
+      if (activeTab !== "game") {
+        replaceRoute("game", selectedProject);
+        return;
+      }
+    }
+    if (showSpecs && pendingSpecsDeepLink.current) {
+      pendingSpecsDeepLink.current = false;
+      if (activeTab !== "specs") {
+        replaceRoute("specs", selectedProject);
+        return;
+      }
+    }
+    const next = resolveWorkspaceTab(activeTab, showSpecs, showGame);
     if (next === activeTab) return;
     replaceRoute(next, selectedProject);
-  }, [activeTab, present, selectedProject, replaceRoute]);
+  }, [activeTab, showSpecs, showGame, selectedProject, replaceRoute]);
 
   const requestNavigate = useCallback(
     (tab: TabId, project: string | null) => {
@@ -89,7 +125,7 @@ export function App() {
 
   const paneTab: WorkspaceTabId =
     selectedProject && isWorkspaceTab(activeTab)
-      ? (fallbackSpecsToGraph(activeTab, present) as WorkspaceTabId)
+      ? (resolveWorkspaceTab(activeTab, showSpecs, showGame) as WorkspaceTabId)
       : "graph";
 
   return (
@@ -113,7 +149,8 @@ export function App() {
       {inWorkspace && selectedProject ? (
         <WorkspaceTabStrip
           selected={paneTab}
-          showSpecs={present}
+          showSpecs={showSpecs}
+          showGame={showGame}
           onSelect={(tab) => requestNavigate(tab, selectedProject)}
         />
       ) : null}
@@ -129,7 +166,9 @@ export function App() {
 
       <main className="flex-1 min-h-0">
         {inWorkspace && selectedProject ? (
-          paneTab === "specs" && present ? (
+          paneTab === "game" && showGame && gameBoard ? (
+            <GameBoardTab board={gameBoard} project={selectedProject} refresh={refreshGameBoard} />
+          ) : paneTab === "specs" && showSpecs ? (
             <SpecBoardTab project={selectedProject} onSelectProject={() => undefined} />
           ) : paneTab === "adr" ? (
             <AdrTab project={selectedProject} onDirtyChange={setAdrDirty} />

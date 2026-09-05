@@ -1,85 +1,253 @@
-# codebase-memory-mcp
+# codebase-kanban-mcp
 
-[![GitHub Release](https://img.shields.io/github/v/release/DeusData/codebase-memory-mcp?style=flat&color=blue)](https://github.com/DeusData/codebase-memory-mcp/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/DeusData/codebase-memory-mcp/dry-run.yml?label=CI)](https://github.com/DeusData/codebase-memory-mcp/actions/workflows/dry-run.yml)
-[![Tests](https://img.shields.io/badge/tests-6768_passing-brightgreen)](https://github.com/DeusData/codebase-memory-mcp)
-[![Languages](https://img.shields.io/badge/languages-158-orange)](https://github.com/DeusData/codebase-memory-mcp)
+[![Languages](https://img.shields.io/badge/languages-158-orange)](https://github.com/JMSolorzano-13/codebase-kanban-mcp)
 [![Hybrid LSP](https://img.shields.io/badge/Hybrid_LSP-10_languages-blue)](#hybrid-lsp)
-[![Agents](https://img.shields.io/badge/agent_surfaces-43-purple)](https://github.com/DeusData/codebase-memory-mcp)
-[![Pure C](https://img.shields.io/badge/pure_C-no_language_runtime-blue)](https://github.com/DeusData/codebase-memory-mcp)
-[![Platform](https://img.shields.io/badge/macOS_%7C_Linux_%7C_Windows-supported-lightgrey)](https://github.com/DeusData/codebase-memory-mcp/releases/latest)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/DeusData/codebase-memory-mcp/badge)](https://scorecard.dev/viewer/?uri=github.com/DeusData/codebase-memory-mcp)
-[![SLSA 3](https://slsa.dev/images/gh-badge-level3.svg)](https://slsa.dev)
-[![VirusTotal](https://img.shields.io/badge/VirusTotal-scanned_every_release-brightgreen?logo=virustotal)](https://github.com/DeusData/codebase-memory-mcp/releases/latest)
+[![Agents](https://img.shields.io/badge/agent_surfaces-43-purple)](https://github.com/JMSolorzano-13/codebase-kanban-mcp)
+[![Pure C](https://img.shields.io/badge/pure_C-no_language_runtime-blue)](https://github.com/JMSolorzano-13/codebase-kanban-mcp)
+[![Platform](https://img.shields.io/badge/macOS_%7C_Linux_%7C_Windows-supported-lightgrey)](https://github.com/JMSolorzano-13/codebase-kanban-mcp)
 [![arXiv](https://img.shields.io/badge/arXiv-2603.27277-b31b1b?logo=arxiv)](https://arxiv.org/abs/2603.27277)
 
-**The fastest and most efficient code intelligence engine for AI coding agents.** Full-indexes an average repository in milliseconds, the Linux kernel (28M LOC, 75K files) in 3 minutes. Answers structural queries in under 1ms. Ships as a native executable with a small verified runtime-asset set for macOS, Linux, and Windows — download, run `install`, done.
+Fork of [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) with a local operator UI and Specs/Game kanban. Source of truth: [github.com/JMSolorzano-13/codebase-kanban-mcp](https://github.com/JMSolorzano-13/codebase-kanban-mcp).
 
-High-quality parsing through [tree-sitter](https://tree-sitter.github.io/tree-sitter/) AST analysis across all 158 languages, enhanced with [**Hybrid LSP** semantic type resolution](#hybrid-lsp) for Python, TypeScript / JavaScript / JSX / TSX, PHP, C#, Go, C, C++, Java, Kotlin, Rust, and Perl — producing a persistent knowledge graph of functions, classes, call chains, HTTP routes, and cross-service links. 15 MCP tools. No language runtime, hosted service, or API key. Plug and play across 43 supported automatic/conditional client surfaces.
+Local code intelligence for agents **and** a local operator UI. Full-indexes an average repository in milliseconds, the Linux kernel (28M LOC, 75K files) in 3 minutes. Answers structural queries in under 1ms. Ships as a native C executable — clone this repository, `scripts/build.sh --with-ui`, `install`, open `http://localhost:9749`. The command name remains `codebase-memory-mcp` (same as upstream).
 
-> **Research** — The design and benchmarks behind this project are described in the preprint [*Codebase-Memory: Tree-Sitter-Based Knowledge Graphs for LLM Code Exploration via MCP*](https://arxiv.org/abs/2603.27277) (arXiv:2603.27277). Evaluated across 31 real-world repositories: 83% answer quality, 10× fewer tokens, 2.1× fewer tool calls vs. file-by-file exploration.
+The engine builds a persistent knowledge graph of functions, classes, call chains, HTTP routes, and cross-service links through [tree-sitter](https://tree-sitter.github.io/tree-sitter/) across 158 languages, plus [**Hybrid LSP**](#hybrid-lsp) type resolution for Python, TypeScript / JavaScript / JSX / TSX, PHP, C#, Go, C, C++, Java, Kotlin, Rust, and Perl. 16 MCP tools. No hosted service or API key. 43 automatic/conditional agent surfaces.
 
-> **Security & Trust** — This tool reads your codebase and writes to your agent configuration files. That is what it is designed to do. If you prefer to audit before running, the [full source is here](https://github.com/DeusData/codebase-memory-mcp). Release archives are signed and checksummed; every distinct extracted member and unpacked UI asset is submitted to VirusTotal, while the downloadable `.tar.gz`/`.zip` containers themselves are not. The release notes record the measured engine count and exact 0/N result; publication requires at least 50 decisive engine results with zero malicious and zero suspicious verdicts. All processing happens 100% locally; your code never leaves your machine. Found a security issue? We want to know — see [SECURITY.md](SECURITY.md). Security is Priority #1 for us.
+The same binary serves an executive workspace at `localhost:9749`: a Dashboard of indexed folders, a 3D Graph, optional Specs / Game boards that **read** skill trees on disk, and an ADR tab filled on reindex. CBM never writes `.sdd-skill/`, `.grill/`, or `.gamedev/`.
+
+> **Research** — The design and benchmarks behind the engine are described in the preprint [*Codebase-Memory: Tree-Sitter-Based Knowledge Graphs for LLM Code Exploration via MCP*](https://arxiv.org/abs/2603.27277) (arXiv:2603.27277). Evaluated across 31 real-world repositories: 83% answer quality, 10× fewer tokens, 2.1× fewer tool calls vs. file-by-file exploration.
+
+> **Security & Trust** — This tool reads your codebase and writes to your agent configuration files. That is what it is designed to do. Audit [this repository](https://github.com/JMSolorzano-13/codebase-kanban-mcp) before running. All processing happens 100% locally; your code never leaves your machine. Signed release archives, VirusTotal scans, and SLSA provenance are published by the [original project](https://github.com/DeusData/codebase-memory-mcp), not by this fork. Found a security issue in this tree? Open an issue here — see [SECURITY.md](SECURITY.md).
 
 <p align="center">
-  <img src="docs/graph-ui-screenshot.png" alt="Graph visualization UI showing the codebase-memory-mcp knowledge graph" width="800">
+  <img src="docs/graph-ui-screenshot.png" alt="3D knowledge graph in the project workspace at localhost:9749" width="800">
   <br>
-  <em>Built-in 3D graph visualization — explore your knowledge graph at localhost:9749</em>
+  <em>Project workspace — Graph tab of the knowledge graph at localhost:9749. Home is the Dashboard; Specs or Game appear when the repo has those skill folders.</em>
 </p>
 
-## Why codebase-memory-mcp
+## Contents
+
+- [Scope](#scope)
+- [Install from this repository](#install-from-this-repository)
+- [Use the operator UI](#use-the-operator-ui)
+- [Use with an agent](#use-with-an-agent)
+- [Upstream engine binaries](#upstream-engine-binaries)
+- [Features](#features)
+- [Installation](#installation)
+- [MCP tools](#mcp-tools)
+- [Configuration](#configuration)
+- [Fork and original project](#fork-and-original-project)
+
+## Scope
+
+Two surfaces, one process: a C daemon that indexes code into SQLite, plus an embedded React UI.
+
+| Surface | What it is | Who uses it |
+|---------|------------|-------------|
+| MCP / CLI | 16 tools: index, search, trace, Cypher, coverage, ADR, … | Coding agents and scripts |
+| Operator UI (`localhost:9749`) | Dashboard → project workspace (Graph, Specs **or** Game, ADR) | You, in the browser |
+
+**In this tree**
+
+- Index any folder into a local graph. Path and project are 1:1: indexing an already-owned path does not mint a second name.
+- Dashboard: indexed projects + Control (CPU/RAM/logs) on one screen. Last indexed uses the browser’s local clock (stored ISO is unchanged).
+- Workspace tabs: Graph always. Specs if the repo has `.sdd-skill/` or `.grill/` and it is not a Game path. Game if the repo has `.gamedev/` (Specs is then omitted). ADR always.
+- Specs Kanban: Todo / In progress / Done. Todo mixes unconverted grill epics (letter E, full path) then planned/draft specs. Click a spec title to expand (blurb + tasks). Archive/unarchive Done specs into CBM-owned state. Open items from `.sdd-skill/baseline/TECH_DEBT.md` sit above the columns.
+- Game board: Inbox + Pre-production + Production + Post-production & Launch. Cards are artifacts that exist on disk. Copy `/gamedev-skill continue` / `continue @role`. Expand in place. Archive done artifacts in CBM. Blocked strip from `state.md`. Open `debt:*` rows from `.gamedev/backlog.md`. Inbox hide uses `.gamedev/epics_registry.md` when that file exists; otherwise Companion-to / roadmap.
+- ADR: user-triggered index (Dashboard Reindex, first create, or `index_repository`) fills generated Purpose/Stack/Decisions from the gamedev trio if `.gamedev/` is a directory, otherwise the sdd-skill trio. Hand-written notes in the manual region are kept. Watcher jobs do not fill.
+- Skills are optional. A repo with none of those folders still indexes and still has Graph + ADR.
+
+**Out of scope (by design)**
+
+- CBM does not write, move, or rename files under `.sdd-skill/`, `.grill/`, or `.gamedev/`. It never creates `epics_registry.md` or `backlog.md`.
+- No drag-and-drop on Specs or Game. No button that starts a skill. Game is a map, not a launcher.
+- Specs and Game are never both shown for the same path (Game wins).
+- The 3D graph color palette is not grayscale; only chrome (Dashboard, tabs, buttons) is dark gray.
+- ADR is not filled by an LLM and not filled by the background watcher.
+
+## Why this fork
 
 - **Extreme indexing speed** — Linux kernel (28M LOC, 75K files) in 3 minutes. RAM-first pipeline: LZ4 compression, in-memory SQLite, fused Aho-Corasick pattern matching. Memory released after indexing.
-- **Plug and play** — native executable plus authenticated release-owned assets for macOS (arm64/amd64), Linux (arm64/amd64), and Windows (amd64). The native install needs no Docker, language runtime, or API keys. Download → `install` → restart agent → done.
-- **158 languages** — vendored tree-sitter grammars compiled into the binary. Nothing to install, nothing that breaks.
+- **Clone and run** — C compiler + zlib; Node.js 22+ only if you want the operator UI. No Docker, no API keys. `scripts/build.sh --with-ui` → `install` → `--ui=true`.
+- **158 languages** — vendored tree-sitter grammars compiled into the binary. Nothing extra to install.
 - **120x fewer tokens** — 5 structural queries: ~3,400 tokens vs ~412,000 via file-by-file search. One graph query replaces dozens of grep/read cycles.
-- **43 supported automatic/conditional client surfaces** — `install` configures detected clients and safely activates conditional clients only when their documented platform, marker, or explicit existing config path is present. See [Multi-Agent Support](#multi-agent-support) for the complete matrix and manual/UI-only boundaries.
-- **Built-in graph visualization** — 3D interactive UI at `localhost:9749`, served from the binary itself.
-- **Infrastructure-as-code indexing** — Dockerfiles, Kubernetes manifests, and Kustomize overlays indexed as graph nodes with cross-references. `Resource` nodes for K8s kinds, `Module` nodes for Kustomize overlays with `IMPORTS` edges to referenced resources.
-- **15 MCP tools** — search, trace, architecture, impact analysis, targeted index-coverage checks, Cypher queries, dead code detection, cross-service HTTP linking, ADR management, and more.
+- **43 supported automatic/conditional client surfaces** — `install` configures detected clients. See [Multi-Agent Support](#multi-agent-support).
+- **Operator workspace** — Dashboard, 3D Graph, Specs (sdd-skill / grill-skill), Game (gamedev-skill), ADR. Skill folders are read-only.
+- **Infrastructure-as-code indexing** — Dockerfiles, Kubernetes manifests, and Kustomize overlays as graph nodes with cross-references.
+- **16 MCP tools** — search, trace, architecture, impact analysis, targeted index-coverage checks, Cypher, dead code, cross-service HTTP linking, ADR, and more.
 
-## Quick Start
+## Install from this repository
 
-**One-line install** (macOS / Linux):
+This fork has no published release binaries. Clone this repository and build. Package-manager one-liners (`npm`, `pip`, Homebrew, AUR, …) still install the **upstream** engine from [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) and do **not** include this kanban UI.
+
+### Prerequisites
+
+| Requirement | macOS | Linux (Debian/Ubuntu) |
+|-------------|-------|------------------------|
+| C/C++ compiler | `xcode-select --install` | `sudo apt install build-essential` |
+| zlib | included | `sudo apt install zlib1g-dev` |
+| Git | included | `sudo apt install git` |
+| Node.js 22+ | [nodejs.org](https://nodejs.org/) or `brew install node` | needed only for `--with-ui` |
+
+### Build and run (macOS / Linux)
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash
+git clone https://github.com/JMSolorzano-13/codebase-kanban-mcp.git
+cd codebase-kanban-mcp
+scripts/build.sh --with-ui
 ```
 
-With graph visualization UI:
+Binary: `build/c/codebase-memory-mcp`.
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash
+# Wire detected coding agents (Claude Code, Cursor, …) and copy onto PATH
+./build/c/codebase-memory-mcp install
+
+# Persist UI on and start the daemon (default port 9749)
+./build/c/codebase-memory-mcp --ui=true --port=9749
 ```
 
-**Windows** (PowerShell):
+If `install` put the binary in `~/.local/bin` and that directory is not on PATH:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Open [http://localhost:9749](http://localhost:9749). You should see the Dashboard (empty until you index a folder).
+
+`install` options: `--skip-config` (binary only, no agent setup), `--dir=<path>` (custom location).
+
+Restart your coding agent after `install`. From the agent: **"Index this project"** — or index from the Dashboard (below).
+
+### Windows
+
+Build from this clone (C compiler + Node.js 22+; see `CONTRIBUTING.md`):
+
 ```powershell
-# 1. Download the installer
-Invoke-WebRequest -Uri https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.ps1 -OutFile install.ps1
-
-# 2. (Optional but recommended) Inspect the script
-notepad install.ps1
-
-# 3. Unblock the downloaded file (removes Mark-of-the-Web restriction added by browsers/Invoke-WebRequest)
-Unblock-File .\install.ps1
-
-# 4. Run it
-.\install.ps1
-
+git clone https://github.com/JMSolorzano-13/codebase-kanban-mcp.git
+cd codebase-kanban-mcp
 ```
 
-> **Note:** If you see a script execution policy error, run `Set-ExecutionPolicy -Scope Process Bypass` first, or invoke with `PowerShell -ExecutionPolicy Bypass -File .\install.ps1`.
+Then follow the same `scripts/build.sh --with-ui` / `install` / `--ui=true` flow as macOS/Linux if you have a Unix environment (WSL is the straightforward path). The upstream Windows zip installs the original engine without this fork’s kanban UI — see [Upstream engine binaries](#upstream-engine-binaries).
 
-Options: `--skip-config` (binary only, no agent setup), `--dir=<path>` (custom location).
+> **Antivirus note:** Microsoft Defender may flag a native CBM binary as
+> `Trojan:Script/Wacatac.B!ml`. This is a known false positive on the upstream
+> family. See [Antivirus False Positives](SECURITY.md#antivirus-false-positives).
 
-> **Antivirus note:** Microsoft Defender may flag a release binary as
-> `Trojan:Script/Wacatac.B!ml`. This is a known false positive — typically 61 of
-> ~62 engines return clean, and the same detection family hits `gh`, llama.cpp,
-> Godot and Microsoft's own Go toolchain. See
-> [Antivirus False Positives](SECURITY.md#antivirus-false-positives) for the
-> evidence, how to verify the artifacts yourself, and how to report it if you
-> think we are wrong.
+### Verify
 
-Restart your coding agent. Say **"Index this project"** — done.
+```bash
+codebase-memory-mcp --version
+codebase-memory-mcp cli list_projects
+# echo '{}' | codebase-memory-mcp   → JSON on stdout (MCP stdio handshake)
+```
+
+UI not loading: confirm `--ui=true` and [http://localhost:9749](http://localhost:9749). Tabs missing Specs/Game: rebuild with `--with-ui` (a binary built without that flag has no operator boards).
+
+## Use the operator UI
+
+All of this is local HTTP on the loopback port (default **9749**). The UI is owned by the shared coordination daemon, so concurrent agent sessions do not start duplicate HTTP servers.
+
+```bash
+codebase-memory-mcp --ui=true --port=9749
+```
+
+`--ui` and `--port` persist. Later sessions reuse those values until you change them.
+
+### Dashboard (account home)
+
+Open `http://localhost:9749` (or `?tab=dashboard`). Old bookmarks `?tab=stats` / `?tab=control` land here too.
+
+1. **New Index** — browse to a repository root, **Index This Folder**. The project name is derived from the path. There is no Project ID field.
+2. Each row: name, path, last indexed (local timezone), health, **Enter**, **Reindex**, delete (confirm).
+3. **Control** is on the same page: CPU/RAM, processes, logs.
+4. Indexing a folder that is already owned does not create a clone: you are sent to that project’s Graph with a notice.
+5. Leftover aliases from before Path 1:1 show as a **Path conflict**: Enter the newest; delete older only after confirm.
+6. **Reindex** on a row refreshes that same name and stays on the Dashboard. That job (and MCP `index_repository`) can fill the ADR generated region.
+
+### Project workspace
+
+**Enter** opens Graph. Header: back to Dashboard, project name, last indexed.
+
+| Tab | When it appears | What you do |
+|-----|-----------------|-------------|
+| Graph | Always | 3D knowledge graph. Colors of nodes/edges are unchanged. |
+| Specs | `.sdd-skill/` **or** `.grill/` is present, and Game is not shown | Kanban of specs + leftover grill epics. |
+| Game | `.gamedev/` is a directory | Four-column phase board. Specs is hidden. |
+| ADR | Always | Generated excerpts + a manual region you can edit. |
+
+URL: `?tab=graph|specs|game|adr&project=<name>`. A leftover `?tab=specs` on a gamedev path becomes Game.
+
+### Specs board
+
+Three columns: Todo, In progress, Done. CBM **reads** `.sdd-skill/` and `.grill/`; it does not move specs.
+
+- **Todo** lists unconverted grill epics first (mark **E**, title, summary, plan, wrapping path), then planned/draft specs. An epic leaves Todo when sdd-skill creates that spec (`Companion to:` / `source.grill_epic` exact path). Epic cards do not expand or archive.
+- Click a **spec title** to expand in place (several cards may stay open). Blurb is 1–2 sentences from `## Executive Summary` when present. Todo shows pending tasks only; In progress shows all with status; Done shows the full list.
+- **Archive** / **Unarchive** on an expanded Done spec. Flags live in CBM’s project database, not in the skill tree. Archived cards stay in Done, hidden until **Show archived** (session only; defaults off each visit). No confirm dialog.
+- **Open tech debt** (chrome above the columns) lists open items from `.sdd-skill/baseline/TECH_DEBT.md` when any exist. Dead text: no click action. Specs does not read gamedev’s registry or backlog.
+
+### Game board
+
+Map of an existing `.gamedev/` tree. CBM does not launch gamedev-skill.
+
+- Columns always visible: **Inbox** | **Pre-production** | **Production** | **Post-production & Launch**. Empty column = header only.
+- Artifact cards: track (A/B/H), work-state, owner. Title expands: Track A gets blurb + tasks + Inputs; Track B gets the header. Inbox cards are leftover grill epics (letter E).
+- Copy **`/gamedev-skill continue @role`** from a card (clipboard, or select-text fallback). Chrome continue is selectable text, not a launch button.
+- **Show Dones** (off by default) reveals done artifacts. **Track A / B / All** filters phase columns only (All includes H). Inbox is never filtered. Filters are UI state: changing project or remounting resets them; a refetch after Archive does not.
+- **Archive** a done artifact the same way as Specs (CBM `game_archive`, not skill files). An archived done card needs **Show Dones** and **Show archived** both on.
+- **Blocked** strip: live `blocked-by` lines from `state.md`.
+- **Open tech debt** after Blocked: open `debt:*` rows from `.gamedev/backlog.md` (closed when the entry contains `resolved-by`).
+- Inbox hide: if `.gamedev/epics_registry.md` is a regular file, that table is the only hide rule (`in_progress` / `closed` / `parked`). If the file is absent, conversion is Companion-to exact path or roadmap slug + NNN. CBM never creates the registry.
+
+### ADR tab
+
+On a **user-triggered** index only:
+
+- If `{repo}/.gamedev/` is a directory → fill from `.gamedev/game_context.md`, `.gamedev/baseline/TECH_STACK.md`, `.gamedev/baseline/ARCHITECTURE_ADR.md`.
+- Else if `{repo}/.sdd-skill/` is a directory → fill from `.sdd-skill/context_ai.md`, `.sdd-skill/baseline/TECH_STACK.md`, `.sdd-skill/baseline/ARCHITECTURE_ADR.md`.
+- Neither directory → existing ADR blob unchanged.
+
+Generated blocks are replaced on the next user-triggered index. The manual region is not. Agents can still read/write the whole document via `manage_adr`. There is no MCP archive tool.
+
+## Use with an agent
+
+After `install` and a client restart, the agent talks MCP stdio to the same daemon.
+
+```
+You: Index this project
+You: What calls ProcessOrder?
+```
+
+The agent should call tools such as `index_repository`, `list_projects`, `search_graph`, `trace_path`, `check_index_coverage`. There is no LLM inside CBM: the client you already use translates questions into those tools.
+
+```bash
+# Same tools, one-shot, no standing daemon
+codebase-memory-mcp cli list_projects
+codebase-memory-mcp cli index_repository --repo-path /absolute/path/to/repo
+codebase-memory-mcp cli search_graph --project my-project --name-pattern '.*Handler.*' --label Function
+```
+
+Enable auto-index on MCP session start:
+
+```bash
+codebase-memory-mcp config set auto_index true
+```
+
+Previously indexed projects then register with the background watcher (`auto_watch` defaults true). `config set auto_watch false` keeps a session from attaching the watcher.
+
+`index_repository` without `name` on a folder that already has one owner is a reindex of that project, not a second identity.
+
+## Upstream engine binaries
+
+This fork is installed from source. The commands below download **DeusData/codebase-memory-mcp** releases: the original graph engine, **without** this repository’s Dashboard / Specs / Game kanban. Use them only if you want upstream, not this fork.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash
+```
+
+Then `codebase-memory-mcp --ui=true --port=9749` if that upstream release embeds a UI (it will not be this fork’s kanban boards).
 
 <details>
 <summary>Manual install</summary>
@@ -131,16 +299,6 @@ Package-manager setup (npm, PyPI, or Go) verifies and publishes a coherent priva
 
 The ordinary `cli` mode is intentionally separate: it runs one command locally and never starts or connects to the coordination daemon, registers a daemon session, or starts watchers/UI. Its only shared state is the OS admission barrier plus per-project locks for graph mutations. While the command is running, a temporary monitor lets activation cancel that operation and its supervised worker safely; the monitor exits with the command and never becomes a standing daemon. See [CLI Mode](#cli-mode) for details.
 
-### Graph Visualization UI
-
-The graph UI is built into the binary — every install on every channel has it. Then run it:
-
-```bash
-codebase-memory-mcp --ui=true --port=9749
-```
-
-Open `http://localhost:9749` in your browser. The UI is owned by the shared coordination daemon, so concurrent agent sessions do not start duplicate HTTP servers.
-
 ### Auto-Index
 
 Enable automatic indexing on MCP session start:
@@ -155,7 +313,11 @@ Watcher registration is controlled separately by `auto_watch` (default `true`). 
 
 ### Keeping Up to Date
 
-**Updates run from the install script on every platform, not from inside the running binary.** `codebase-memory-mcp update` validates your flags and then prints the exact command to run:
+**This fork:** `git pull` in your clone of [codebase-kanban-mcp](https://github.com/JMSolorzano-13/codebase-kanban-mcp), rebuild with `scripts/build.sh --with-ui`, then run `./build/c/codebase-memory-mcp install` so agents pick up the new binary.
+
+`codebase-memory-mcp update` prints an install-script command. That script downloads **upstream** [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) releases, not this fork. Use it only if you intend to replace this build with the original engine.
+
+**Updates of an upstream install** run from the install script on every platform, not from inside the running binary. `codebase-memory-mcp update` validates your flags and then prints the exact command to run:
 
 ```bash
 # macOS / Linux
@@ -173,7 +335,7 @@ Why it works this way. On Windows it is a hard requirement — a running executa
 
 If PowerShell refuses to run the script because the file came from the internet, `Unblock-File` it first.
 
-Installed through **npm or pip**? Update with your package manager on every platform (`npm install -g codebase-memory-mcp@latest` / `pip install -U codebase-memory-mcp`).
+Installed through **npm or pip** (upstream packages)? Update with your package manager (`npm install -g codebase-memory-mcp@latest` / `pip install -U codebase-memory-mcp`). Those packages are not this fork.
 
 ### Uninstall
 
@@ -186,6 +348,14 @@ Removes owned agent config entries, skills, hooks, instructions, and the install
 The install script placed beside the binary is **reported, not deleted** — uninstall prints its path and the `rm` command for it. It is left alone on purpose: it may be your own copy, a symlink into a checkout, or managed by a package manager, and an uninstaller should not delete a file it cannot prove it owns.
 
 ## Features
+
+### Operator workspace
+- **Dashboard** — indexed folders + Control on one screen; Path 1:1; Reindex stays home
+- **Graph** — 3D constellation (node/edge colors unchanged)
+- **Specs** — Kanban when `.sdd-skill/` or `.grill/` is present; mixed Todo (grill epics then specs); expand; CBM archive; open TECH_DEBT.md
+- **Game** — four phase columns when `.gamedev/` is present (Specs hidden); Inbox; copy continue; expand; CBM archive; blocked strip; backlog debt; registry hide
+- **ADR** — generated region filled on user-triggered index (gamedev trio XOR sdd trio); manual region kept
+- Skill trees are read-only. See [Use the operator UI](#use-the-operator-ui).
 
 ### Graph & analysis
 - **Architecture overview**: `get_architecture` returns languages, packages, entry points, routes, hotspots, boundaries, layers, and clusters in a single call
@@ -235,7 +405,9 @@ The install script placed beside the binary is **reported, not deleted** — uni
 - **Auto-sync**: Background watcher detects file changes and re-indexes automatically
 - **Route nodes**: REST endpoints are first-class graph entities
 - **CLI mode**: `codebase-memory-mcp cli search_graph '{"project": "my-project", "name_pattern": ".*Handler.*"}'`
-- **Available on**: npm, PyPI, Homebrew, Scoop, Winget, Chocolatey, AUR, `go install`
+- **Operator UI**: `codebase-memory-mcp --ui=true --port=9749` → `http://localhost:9749`
+- **This fork**: clone [JMSolorzano-13/codebase-kanban-mcp](https://github.com/JMSolorzano-13/codebase-kanban-mcp) and `scripts/build.sh --with-ui`
+- **Upstream packages** (engine only, no this kanban UI): npm, PyPI, Homebrew, Scoop, Winget, Chocolatey, AUR, `go install` from [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp)
 
 ## Team-Shared Graph Artifact
 
@@ -255,7 +427,7 @@ The result is similar in spirit to graphify's `graphify-out/` directory, but as 
 
 ## How It Works
 
-codebase-memory-mcp is a **structural analysis backend** — it builds and queries the knowledge graph. It does **not** include an LLM. Instead, it relies on your MCP client (Claude Code, or any MCP-compatible agent) to be the intelligence layer.
+codebase-memory-mcp is a **structural analysis backend** — it builds and queries the knowledge graph. It does **not** include an LLM. Your MCP client is the intelligence layer for questions. The operator UI is a second client of the same daemon: it lists projects, shows the graph, and **reads** skill folders on disk.
 
 ```
 You: "what calls ProcessOrder?"
@@ -267,7 +439,9 @@ codebase-memory-mcp: executes graph query, returns structured results
 Agent: presents the call chain in plain English
 ```
 
-**Why no built-in LLM?** Other code graph tools embed an LLM for natural language → graph query translation. This means extra API keys, extra cost, and another model to configure. With MCP, the agent you're already talking to *is* the query translator.
+The browser at `localhost:9749` talks HTTP to the same process (Dashboard, Graph, Specs/Game, ADR). Archive flags live in the project SQLite file. Skill trees stay owned by sdd-skill, grill-skill, and gamedev-skill.
+
+**Why no built-in LLM?** Other code graph tools embed an LLM for natural language → graph query translation. This means extra API keys, extra cost, and another model to configure. With MCP, the agent you're already talking to *is* the query translator. ADR fill on reindex is a bounded file parse, not a model.
 
 ## Performance
 
@@ -308,7 +482,9 @@ When you open a memory/performance issue, **attach the `.ndjson` trajectory** �
 
 ## Installation
 
-### Pre-built Binaries
+Clone and build this fork: [Install from this repository](#install-from-this-repository). The tables below describe **upstream** DeusData release archives and package managers. They do not install [codebase-kanban-mcp](https://github.com/JMSolorzano-13/codebase-kanban-mcp).
+
+### Upstream pre-built binaries
 
 | Platform | Archive |
 |----------|---------|
@@ -322,7 +498,9 @@ Every release includes `checksums.txt` with SHA-256 hashes. The executable is se
 
 > **Windows note**: SmartScreen may show a warning for unsigned software. Click **"More info"** → **"Run anyway"**. Verify integrity with `checksums.txt`.
 
-### Setup Scripts
+### Setup Scripts (upstream engine only)
+
+These download [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp), not this fork.
 
 <details>
 <summary>Automated download + install</summary>
@@ -341,7 +519,7 @@ irm https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/scripts/
 
 </details>
 
-### AUR (Arch Linux)
+### AUR (Arch Linux) — upstream engine only
 
 ```bash
 yay -S codebase-memory-mcp-bin
@@ -356,7 +534,7 @@ The `codebase-memory-mcp-bin` package is available at: https://aur.archlinux.org
 ### Install via Claude Code
 
 ```
-You: "Install this MCP server: https://github.com/DeusData/codebase-memory-mcp"
+You: "Install this MCP server: https://github.com/JMSolorzano-13/codebase-kanban-mcp"
 ```
 
 ### Build from Source
@@ -370,15 +548,18 @@ You: "Install this MCP server: https://github.com/DeusData/codebase-memory-mcp"
 | **C++ compiler** | `g++ --version` or `clang++ --version` | Same as above |
 | **zlib** | — | macOS: included, Linux: `apt install zlib1g-dev` |
 | **Git** | `git --version` | Pre-installed on most systems |
+| **Node.js 22+** | `node --version` | Only for `--with-ui` (operator workspace) |
 
 </details>
 
 ```bash
-git clone https://github.com/DeusData/codebase-memory-mcp.git
-cd codebase-memory-mcp
-scripts/build.sh --with-ui          # the shipped composition (graph UI embedded)
-scripts/build.sh                    # without the UI (development only)
+git clone https://github.com/JMSolorzano-13/codebase-kanban-mcp.git
+cd codebase-kanban-mcp
+scripts/build.sh --with-ui          # shipped composition: engine + operator UI
+scripts/build.sh                    # engine only (no Dashboard / Specs / Game)
 # Binary at: build/c/codebase-memory-mcp   (codebase-memory-mcp.exe on Windows)
+./build/c/codebase-memory-mcp install
+./build/c/codebase-memory-mcp --ui=true --port=9749
 ```
 
 Every platform ships **one self-contained executable**: the graph UI and the agent integration templates are linked into the binary, so an extracted archive is immediately complete.
@@ -415,7 +596,7 @@ Add to `~/.claude.json` (user scope) or project `.mcp.json`:
 }
 ```
 
-Restart your agent. Verify with `/mcp` — you should see `codebase-memory-mcp` with 15 tools.
+Restart your agent. Verify with `/mcp` — you should see `codebase-memory-mcp` with 16 tools.
 
 </details>
 
@@ -606,6 +787,7 @@ JSON arguments can also be piped on stdin. Inline JSON remains accepted for back
 | `list_projects` | List all indexed projects with node/edge counts. |
 | `delete_project` | Remove a project and all its graph data. |
 | `index_status` | Check indexing status of a project. |
+| `check_index_coverage` | Coverage for cited paths and bounded scopes. Best-effort; a clean result is not proof of completeness. |
 
 ### Querying
 
@@ -623,6 +805,8 @@ JSON arguments can also be piped on stdin. Inline JSON remains accepted for back
 | `ingest_traces` | Ingest runtime traces to validate HTTP_CALLS edges. |
 
 `manage_adr` query modes (`get` and `sections`) use the server's cached query store so they can proceed while a same-project reindex is running. If another process publishes a replacement store during reindexing, they can return the pre-publication ADR until idle eviction refreshes that cache. Updates remain serialized through the project mutation guard.
+
+There is no MCP tool for Specs/Game archive. Those flags are HTTP-only (`POST /api/spec-board`, `POST /api/game-board`) and never written into skill trees.
 
 ## Graph Data Model
 
@@ -723,7 +907,12 @@ SQLite databases stored at `~/.cache/codebase-memory-mcp/`. Persists across rest
 | `trace_path` returns 0 results | Use `search_graph(name_pattern=".*PartialName.*")` first to find the exact name. |
 | Queries return wrong project results | Add `project="name"` parameter. Use `list_projects` to see names. |
 | Binary not found after install | Add to PATH: `export PATH="$HOME/.local/bin:$PATH"` |
-| UI not loading | Ensure you ran `--ui=true`. Check `http://localhost:9749`. |
+| UI not loading | `--ui=true`. Open `http://localhost:9749`. Rebuild `--with-ui` if the binary has no UI. |
+| No Specs tab | Repo needs `.sdd-skill/` or `.grill/`, and must not be a `.gamedev/` path. |
+| No Game tab | Repo needs a `.gamedev/` directory. Rebuild `--with-ui`. |
+| Specs and Game both showing | Should not happen: Game wins. Leftover `?tab=specs` on gamedev becomes Game. |
+| Indexing the same folder twice | Path is 1:1. You land on the existing Graph; use Dashboard Reindex to refresh. |
+| ADR empty after watcher | Fill runs on user-triggered index only (Reindex, create, `index_repository`). |
 
 ## Hybrid LSP
 
@@ -773,31 +962,34 @@ Also supported (not yet benchmarked): Ada, Agda, Apex, Assembly (NASM), Astro, A
 src/
   main.c              Entry point (MCP stdio server + CLI + install/update/config)
   daemon/             Per-account session coordination, IPC, lifecycle, shared jobs/watchers
-  mcp/                MCP server (15 tools, JSON-RPC 2.0, session detection, auto-index)
+  mcp/                MCP server (16 tools, JSON-RPC 2.0, session detection, auto-index)
+  adr/                XOR trio parse on user-triggered index (gamedev dir wins, else sdd)
   cli/                Install/uninstall/update/config (43 client surfaces, hooks, instructions)
-  store/              SQLite graph storage (nodes, edges, traversal, search, Louvain)
+  store/              SQLite graph + spec_archive + game_archive
   pipeline/           Multi-pass indexing (structure → definitions → calls → HTTP links → config → tests)
   cypher/             Cypher query lexer, parser, planner, executor
-  discover/           File discovery (.gitignore, .cbmignore, symlink handling)
-  watcher/            Background auto-sync (git polling, adaptive intervals)
+  discover/           File discovery (.gitignore, .cbmignore, symlink handling; .sdd-skill skipped)
+  watcher/            Background auto-sync (git polling; does not fill ADR)
   traces/             Runtime trace ingestion
-  ui/                 Local HTTP server + verified external 3D-UI asset pack
+  ui/                 HTTP + spec_board + game_board (read skill trees; archive flags only)
   foundation/         Platform abstractions (threads, filesystem, logging, memory)
+graph-ui/             Dashboard, Graph, Specs, Game, ADR (embedded when built --with-ui)
 internal/cbm/         Vendored tree-sitter grammars (158 languages) + AST extraction engine
 ```
 
 ## Security
 
-Every release is verified through a multi-layer pipeline before publication:
+This fork is meant to be compiled from [JMSolorzano-13/codebase-kanban-mcp](https://github.com/JMSolorzano-13/codebase-kanban-mcp). It does not publish signed GitHub Releases yet. Libraries are vendored at compile time; there is no language-runtime download chain for the engine itself.
 
-- **VirusTotal** — every distinct extracted release file and unpacked UI asset is scanned; downloadable `.tar.gz`/`.zip` containers are not submitted (minimum 50 decisive engines; zero malicious and zero suspicious required). Release notes retain archive SHA-256 provenance and link durable public association, exact-scan-set, and per-object result files containing every measured engine count and VirusTotal report URL.
-- **SLSA Level 3** — cryptographic build provenance generated by the trusted GitHub Actions build workflow; verify with `gh attestation verify <file> --repo DeusData/codebase-memory-mcp --signer-workflow DeusData/codebase-memory-mcp/.github/workflows/_build.yml`
-- **Sigstore cosign** — keyless signatures on all artifacts; bundles included in every release
-- **SHA-256 checksums** — `checksums.txt` published with every release; verified by both install scripts before extraction
-- **CodeQL SAST** — blocks release pipeline if any open alerts remain
-- **No language-runtime dependency chain** — libraries are vendored at compile time; the small release-owned runtime assets are checksum-verified and content-addressed
+The original project’s published archives use a multi-layer pipeline (VirusTotal on extracted members, SLSA Level 3, Sigstore cosign, SHA-256 checksums, CodeQL). That pipeline applies to [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) releases, not to a local build of this fork. Verify upstream artifacts with:
 
-### v0.7.0 VirusTotal scans
+```bash
+gh attestation verify <file> --repo DeusData/codebase-memory-mcp --signer-workflow DeusData/codebase-memory-mcp/.github/workflows/_build.yml
+```
+
+### Upstream v0.7.0 VirusTotal scans
+
+These hashes are from the original project’s v0.7.0 release, not from this fork.
 
 | Binary | SHA-256 | VirusTotal |
 |--------|---------|-----------|
@@ -807,8 +999,24 @@ Every release is verified through a multi-layer pipeline before publication:
 | `darwin-amd64` | `28c6d640e1a0ac7bfcab...` | [0/72 ✅](https://www.virustotal.com/gui/file/28c6d640e1a0ac7bfcab5094c2186eced5264a20dcdffcb4455a1b28c5df2171/detection) |
 | `windows-amd64` | `9c3ddcf78368fd4fa891...` | [0/72 ✅](https://www.virustotal.com/gui/file/9c3ddcf78368fd4fa89156a553641bf1e03640b4fb6dd29a12c84aa5bc98cd86/detection) |
 
-Scan links for every release are also included in the GitHub Release notes automatically.
+Scan links for every upstream release are included in that project’s GitHub Release notes.
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
+
+Copyright (c) 2026 Juan M. Solórzano I. Portions of the engine are Copyright (c) 2025 DeusData.
+
+## Fork and original project
+
+This repository — [JMSolorzano-13/codebase-kanban-mcp](https://github.com/JMSolorzano-13/codebase-kanban-mcp) — is a **fork** of [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp).
+
+The knowledge-graph engine, MCP tools, Hybrid LSP layer, tree-sitter grammars, CLI/install surfaces, and signed-release pipeline come from that project. This fork adds the executive Dashboard and the Specs / Game kanban operator UI (read-only skill boards). The installed binary is still named `codebase-memory-mcp`.
+
+| | URL |
+|--|-----|
+| This fork | https://github.com/JMSolorzano-13/codebase-kanban-mcp |
+| Original project | https://github.com/DeusData/codebase-memory-mcp |
+| Engine research preprint | https://arxiv.org/abs/2603.27277 |
+
+Use this fork when you want the kanban operator UI. Use the original project for published binaries, npm/PyPI/Homebrew packages, and supply-chain attestations.

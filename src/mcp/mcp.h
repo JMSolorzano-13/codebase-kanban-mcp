@@ -92,6 +92,15 @@ int cbm_mcp_get_int_arg(const char *args_json, const char *key, int default_val)
 /* Extract a bool argument. Returns false if not found. */
 bool cbm_mcp_get_bool_arg(const char *args_json, const char *key);
 
+/*
+ * @sdd-task: Task #2 - Pipeline hook + `.sdd-skill` skip
+ * @sdd-spec: specs/spec-004-j8k-adr-parse-on-reindex/spec.md
+ * @sdd-decision: SDD-ADR-019 default fill on; explicit false only
+ * @sdd-why: HTTP/MCP share handle_index_repository; do not advertise on schema
+ * @human-debug: Watcher still fills → args lacked adr_fill:false (mcp.c:1554)
+ */
+bool cbm_mcp_index_want_adr_fill(const char *args_json);
+
 /* Extract the tool name from a tools/call params JSON. Heap-allocated. */
 char *cbm_mcp_get_tool_name(const char *params_json);
 

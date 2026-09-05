@@ -1,0 +1,16 @@
+# glossary — add-epics-plans-kanban
+
+- Mixed Todo: Todo column may hold sdd-skill specs (planned/draft from active.json) AND grill-skill epics. In progress + Done stay specs-only. (source: Q1 confirmed)
+- Grill epic card: board card sourced from `.grill/plans/<slug>/epics/epic-NNN-<name>.md`. Shows epic title (name), summary, owning plan. Not a spec. (source: user + grill filesystem)
+- Conversion: epic→spec happens when sdd-skill creates the spec on disk. Board does not drag/write. Epic file stays in `.grill/`; board stops painting it in Todo once a spec claims it. (source: Q1 confirmed)
+- Specs tab presence: show Specs tab if `.sdd-skill/` OR `.grill/` exists at project root_path. Today omit-until-true is sdd-only. (source: Q1 confirmed)
+- Companion-to grill path: this repo's spec.md Related Specs line `Companion to: .grill/plans/<plan>/epics/epic-NNN-<name>.md`. Not in sdd-skill's official spec.md template (template Companion to is spec-NNN). Durable per-spec link. (source: inspection spec-001..007)
+- active.json source: this project's `active.json.source.grill_plan` + `grill_epic`. Current-cycle pointer only; overwritten on next feature. Not conversion history. (source: inspection active.json + sdd template has no source key)
+- Converted epic: omitted from Todo when ADR-002 match hits. Epic file is not deleted. (source: ADR-002)
+- Eligible epic: any epic file under any plan, draft or closed, pending or detailed, except converted. (source: ADR-003)
+- Epic card: always-visible title + summary + plan title. Kind mark = letter E, discreet hue, no pill. No task expand. (source: ADR-004)
+- Todo order: epics first (index.md plan order, epic-NNN within), then planned/draft specs (active.json order). (source: ADR-005)
+- Gamedev (this plan): out. Later plan paints/hides gamedev. Path may-hold-both-skills undecided — do not lock xor. Presence/kind additive. (source: ADR-006)
+- Epic cap: own slot pool, same magnitude as specs (64); overflow omit; N spec-level. (source: ADR-007)
+- Board read: same GET /api/spec-board, additive fields; tab name Specs. (source: ADR-008)
+- Shipped: epic-001 → spec-008-g8r-grill-epic-todo; epic-002 → spec-009-t4x-specs-tab-grill-presence. (source: close 2026-08-30)

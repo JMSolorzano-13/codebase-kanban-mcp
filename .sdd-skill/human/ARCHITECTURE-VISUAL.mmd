@@ -1,0 +1,316 @@
+%% Architecture visual — codebase-memory-mcp graph-ui + C daemon
+%% Updated: 2026-09-03 spec-017-b4w-game-debt-chrome Task #3
+%% spec-017 Task #3: GameBoardTab DebtStrip after BlockedStrip before 4 cols; role=region aria-label specBoard.openTechDebt; dead p rows; break-words; omit when debt missing/[]; Graph/ADR/header omit Game debt
+%% spec-017 Task #2: HTTP leftover — same GET debt[]; no has_more; no backlog fopen in HTTP; GET/POST leave backlog/state/registry/index bytes; absent GET does not create; POST debt id 404; spec-board debt stays TECH_DEBT.md
+%% spec-017 Task #1: cbm_game_board_read fills debt[] from {root}/.gamedev/backlog.md after overlay_blocked; parse debt: tags in game_board.c; to_json always emits debt[{id,title}]; cap 16; no has_more; do not call spec_board helper
+%% spec-016 closeprep: Game Inbox registry sole hide when regular file present; skip Companion-to/roadmap; absent/dir keeps spec-011; InboxCard id wrap; Artifact truncate locked; Specs does not read registry
+%% spec-016 closeprep: Game Inbox registry sole hide when regular file present; skip Companion-to/roadmap; absent/dir keeps spec-011; InboxCard id wrap; Artifact truncate locked; Specs does not read registry
+%% spec-016 Task #3: InboxCard id whitespace-normal break-all (full card.id); TitleControl truncate + letter E stay; ArtifactCard id truncate locked; empty Inbox header only (no all tracked / no artifacts copy); Show Dones leftover Inbox stays; hide C-owned (UI mocks filtered inbox)
+%% spec-016 Task #2: HTTP leftover locks — handle_game_board_get still read→merge→to_json; no registry fopen in HTTP; no has_more/registry key; GET does not create file; spec-board still lists closed leftover
+%% spec-016 Task #1: Inbox hide gated on regular file {root}/.gamedev/epics_registry.md; present → parse + skip load_conv; omit Plan+NNN hide-set only; absent/dir → spec-011 Companion-to/roadmap; cap 64; no has_more
+%% spec-015 closeprep: Specs Open tech debt strip + EpicCard id wrap; same GET additive debt[{id,title}] cap 16 no has_more; fopen rb in spec_board.c after grill; HTTP merge specs-only; Game/registry/backlog.md not this spec
+%% spec-015 Task #4: leftover Vitest locks live in tests (header/Graph/ADR/Game omit, dead row, Has more, grill-only, Companion-to); GameBoardTab.tsx / WorkspaceHeader.tsx unchanged; strip still SpecBoardTab-only; GraphTab mocked
+%% spec-015 Task #3: SpecBoardTab DebtStrip above 3-col; role=region aria-label Open tech debt; no required h2; missing debt=[]; EpicCard id break-all; SpecCard id truncate; Graph/ADR/Game/header do not host strip
+%% spec-015 Task #2: GET 200 always has debt[]; POST epic id 404 unchanged; HTTP does not fopen TECH_DEBT.md
+%% spec-015 Task #1: cbm_spec_board_read fills debt[] from {root}/.sdd-skill/baseline/TECH_DEBT.md after grill fill; to_json always emits debt[{id,title}]; cap 16; no has_more
+%% spec-014 closeprep: Game chrome Show archived | Show Dones | Track A/B/All; client React state; remount/?project= reset; GET refetch keeps; Specs lock
+%% spec-012 Show archived alone revealing archived done is superseded — AND (Show Dones + Show archived); leftover archived pending still shows
+%% spec-014 Task #2: Track A/B/All exclusive (All = A B H other null); AND leftover invert; Specs lock no Show Dones/Track A/All; filter click no GET/POST/query/localStorage
+%% spec-014 Task #1: Game chrome cluster Show archived | Show Dones | Track A/B/All; visiblePhaseCards(showArchived, showDones, track); first-paint dones hidden; remount resets three; Inbox unfiltered
+%% Prior: spec-013-r9w-adr-fill-gamedev-trio closeprep
+%% spec-013 Task #1: cbm_adr_fill_document XOR — .gamedev/ dir → gamedev trio only; else sdd; neither dir → NULL
+%% spec-013 Task #2: HTTP/MCP job Gherkin on that helper; hook/ALWAYS_SKIP/32768 unchanged
+%% Empty .gamedev/ still marks; file-at-path .gamedev is not present; no sdd fallback
+%% spec-012: expand + game_archive + POST /api/game-board + blocked strip/overlay; drag stays off
+%% Prior: Task #5 Archive UI + refresh; Task #4 title Set + blocked region; Task #3 GET merge + POST + copy
+%% Prior: Task #2 expand parse + overlay; Task #1 game_archive table; spec-011 filled columns + Inbox
+%% App: useGameBoard + useSddSkillPresent; showGame/showSpecs settled-aware; resolveWorkspaceTab URL+pane
+%% Silent win: Game shown ⇒ Specs omitted even if sdd or grill; in-flight omits both; game-board 500 does not hide Specs
+%% Dual GET: /api/game-board (presence+chrome+phase cards+inbox) + /api/spec-board (spec-009); never /api/skill-presence
+%% Enter stays Graph; inbound tab=game restore; leftover tab=specs + gamedev → tab=game
+%% GET /api/game-board: handle_game_board_get → cbm_game_board_read → fopen rb state.md (chrome + blocked lines) → exist-only phase walk + expand parse → overlay → fopen rb backlog.md (open debt:* cap 16) → HTTP merge game_archive matching ids → to_json (additive fields + blocked[] + archived + always debt[])
+%% POST /api/game-board: flag object; Inbox/unknown 404 card not found; work_state != done (incl overlay blocked) 409 card not done; mutation lock; zero skill writes
+%% publish_staged: after ADR write, copy spec_archive and game_archive live→stage (dump replace)
+%% spec-board still has no gamedev_skill_present; graph-ui never calls /api/skill-presence
+%% GameBoardTab: spec-010 chrome continue stays <p>; card continue is button (writeText; select-text fallback; no toast)
+%% GameBoardTab expand: title button aria-expanded; expandedIds Set by GET id; all collapsed; multi-open; project/remount clear
+%% Blocked region above columns if blocked.length>0; overlay prefix Blocked + blocked_by collapsed+expanded (C overlay Task #2)
+%% useGameBoard: one-shot + refresh(); never unset settled/present on refresh (SDD-ADR-054)
+%% GameBoardTab archive: Show archived in pane chrome (session-only; GET refetch does not reset)
+%% spec-014 chrome cluster: Show archived | Show Dones | Track A/B/All (aria-pressed; All default; no radiogroup)
+%% visiblePhaseCards: drop track mismatch; drop work_state done unless showDones; drop archived done unless showArchived too (AND)
+%% Track exclusive onClick; Show archived alone still hides archived done; Unarchive stays only while Show Dones on
+%% Game: DebtStrip after BlockedStrip when (board.debt ?? []).length > 0; omit when missing or []; Graph/ADR/Specs/header do not host Game debt rows
+%% Specs: DebtStrip above 3-col when (debt ?? []).length > 0; omit when missing or []; Graph/ADR/Game/header do not host Specs strip
+%% Leftover omit/dead-row/Has more/grill-only locks live in tests; strip still SpecBoardTab-only (no GameBoardTab.tsx / WorkspaceHeader.tsx edit)
+%% EpicCard id whitespace-normal break-all; title truncate stays; SpecCard id truncate locked
+%% Specs: Show archived on Done only; no Show Dones / Track A / All
+%% Filter click: no GET/POST /api/game-board; no query track/show_dones/show_archived; no localStorage showDones/gameTrack
+%% Inbox unfiltered; leftover pending archived stays; POST then await refresh; no confirm; no fourth column
+%% Cards: draggable=false; body click does not expand/archive/POST; Archive/Unarchive on expanded done only
+%% Last-indexed visible text: formatIndexedAt host TZ + timeZoneName short (SDD-ADR-034)
+%% time dateTime + title stay raw indexed_at ISO; store stays ISO Z; newest still ISO strcmp
+%% Specs tab: expandedIds Set by spec id; title button toggle; blurb if non-empty
+%% TaskList: todo pending-only / In Progress+Done all (spec-005 Set unchanged)
+%% Todo: EpicCard then spec todos; In progress/Done SpecCard only; letter E --color-epic-mark #7d8ec9
+%% EpicCard display-only (no expand/archive/POST); id wraps break-all; title truncate stays; spec-005 Set + spec-006 Archive stay on SpecCard
+%% Specs strip present: game settled AND NOT showGame AND spec-009 (200 AND sdd OR grill)
+%% Enter still Graph; neither / hang / spec-board 500 omit Specs after game settled; .gamedev/ shows Game
+%% Host Kanban same OR; last-resort both-false / !board
+%% Done: hide archived unless session showArchived; reset on project change; no localStorage
+%% Archive/Unarchive on expanded Done only; POST then await GET refresh (not wait for 4s poll)
+%% GET /api/spec-board: read in spec_board.c (.sdd-skill/ + .grill/ if dir + TECH_DEBT.md after grill) → HTTP merge spec_archive onto specs only → to_json (GET 200 always has debt[])
+%% HTTP never fopen/opendir .grill/ or TECH_DEBT.md; grill_skill_present + epics[] cap 64; debt[] cap 16; omit Companion-to / source.grill_epic; no has_more; no gamedev
+%% GET /api/game-board is a sibling path (not additive on spec-board): HTTP merge game_archive; POST flag object; no MCP tool
+%% Phase arrays: exist-only pre/prod/post cards; compiled owner/track; inbox unconverted grill
+%% Inbox hide: regular file epics_registry.md → registry Plan+NNN hide-set only (skip Companion-to/roadmap load); missing or dir → Companion-to exact OR slug+table NNN
+%% POST /api/spec-board: find specs[] only; epic id 404 spec not found (no set); 409 spec not done; mutation lock like ADR
+%% spec_board.c stays zero-write; archived unset on read; no sibling /api/spec-archive
+%% publish_staged: after ADR write, copy spec_archive live→stage (dump replace)
+%% Reindex: POST {root_path, project}; 202 IndexProgress stay Dashboard; 500 alert stay
+%% Modal still {root_path} only; path_exists → Graph + role=status; no header Reindex
+%% User persist: capture saved_adr → cbm_adr_fill_document XOR trio → publish
+%% XOR: .gamedev/ dir → fopen gamedev trio only; else .sdd-skill/ dir → sdd trio; neither → NULL
+%% Watcher / auto_watch: adr_fill false; ALWAYS_SKIP .sdd-skill (fopen selected trio only; .gamedev not skipped)
+%% AdrTab: one textarea; stamp from list indexed_at when CBM-GENERATED (local Intl); warning i18n
+%% GET /api/adr and manage_adr get read the same project_summaries blob
+
+graph TB
+  Browser["localhost:9749"] --> Route["lib/route.ts readRoute WORKSPACE_TABS +game"]
+  Route -->|workspace + project| App["App.tsx dual one-shot"]
+  Route -->|alias or no project| Dash["Dashboard"]
+  App --> Head["header: brand + WorkspaceHeader"]
+  App --> Strip["nav tablist showGame or showSpecs"]
+  App --> SpecsHook["useSddSkillPresent one-shot spec-board"]
+  App --> GameHook["useGameBoard one-shot + refresh"]
+  SpecsHook --> BoardGET
+  GameHook --> GameGET
+  GameHook --> Refresh["refresh same GET; settled stays"]
+  Refresh --> GameGET
+  GameHook --> ParseSkip["parseGameBoard skip invalid kind; archived false; blocked empty"]
+  GameHook --> Flags{"game.settled?"}
+  Flags -->|no| OmitBoth["omit Game and Specs"]
+  Flags -->|yes + present| ShowGame["showGame hide Specs"]
+  Flags -->|yes + !present| SpecsRule["showSpecs spec-009"]
+  ShowGame --> Strip
+  SpecsRule --> Strip
+  OmitBoth --> Strip
+  App --> Router["resolveWorkspaceTab"]
+  Router --> K1["fallbackGameToGraph"]
+  Router --> K2["fallbackSpecsToGraph"]
+  Strip -->|graph| Graph["GraphTab"]
+  Strip -->|specs and showSpecs| Specs["SpecBoardTab debt strip + EpicCard wrap"]
+  Specs -->|mount| SpecsLock["no Show Dones Track A All"]
+  Specs --> DebtUI{"(board.debt ?? []).length > 0?"}
+  DebtUI -->|yes| DebtReg["region Open tech debt"]
+  DebtUI -->|missing or empty| NoDebt["omit strip"]
+  DebtReg --> ColRow["3-col Todo In progress Done"]
+  NoDebt --> ColRow
+  Strip -->|adr| Adr["AdrTab"]
+  Strip -->|game and showGame| GamePane["GameBoardTab chrome cluster + blocked + 4-col"]
+  Graph -.->|no Open tech debt| NoHost["Graph ADR Game header omit strip"]
+  Adr -.->|no Open tech debt| NoHost
+  GamePane -.->|no Open tech debt| NoHost
+  Head -.->|no Open tech debt| NoHost
+  NoHost -.->|leftover Vitest| LockTests["tests only; strip still SpecBoardTab"]
+  ParseSkip -->|board prop no pane fetch| GamePane
+  GamePane -->|phase token| PhaseMap["i18n EN label"]
+  GamePane -->|phase and focus null| MissChrome["state.md missing"]
+  GamePane -->|chrome continue| ContText["selectable p not button"]
+  GamePane -->|chrome cluster| ChromeFilt["Show archived pipe Show Dones pipe Track A B All"]
+  ChromeFilt -->|project remount| ResetFilt["dones false archived false All"]
+  ChromeFilt -->|GET refetch| KeepFilt["three stay"]
+  ChromeFilt -->|filter click| NoPersist["no GET POST query localStorage"]
+  ChromeFilt --> VisCards["visiblePhaseCards track then dones then archived AND"]
+  VisCards -->|Track A| KeepA["omit B H"]
+  VisCards -->|Track B then All| RestoreH["H returns"]
+  GamePane -->|blocked length 0| NoStrip["omit Blocked region"]
+  GamePane -->|blocked length > 0| BlockedReg["region named Blocked"]
+  BlockedReg -->|click| NoNav["no scroll highlight nav"]
+  NoStrip --> ColGrid["4-col Inbox Pre Prod Post"]
+  BlockedReg --> ColGrid
+  ColGrid -->|phase match not Inbox| AriaCur["aria-current true"]
+  ColGrid -->|empty or all filtered hidden| HeaderOnly["header only; no all tracked / no artifacts copy"]
+  ColGrid -->|phase not inbox| VisCards
+  ColGrid -->|inbox| InboxStay["never filter"]
+  VisCards -->|kind artifact| ArtCard["track A/B/H + work-state EN + id truncate"]
+  InboxStay -->|kind epic| InboxCard["letter E + id wrap break-all"]
+  ColGrid -->|kind artifact leftover| ArtCard
+  ColGrid -->|kind epic| InboxCard
+  ArtCard --> TitleBtnG["title button aria-expanded"]
+  InboxCard --> TitleBtnG
+  TitleBtnG --> GameSet["expandedIds Set by GET id"]
+  GameSet -->|Track A| BodyA["blurb + tasks or noTasksYet + Inputs"]
+  GameSet -->|Track B or H| BodyB["last_decision + open + recent"]
+  GameSet -->|Inbox epic| BodyE["summary plan_title chrome only"]
+  GameSet -->|expanded done artifact| ArchCtrl["Archive or Unarchive"]
+  GameSet -->|Inbox or pending leftover| NoArch["no Archive chrome"]
+  ArchCtrl --> PostGB["POST /api/game-board"]
+  PostGB -->|200| AwaitG["await refresh"]
+  AwaitG --> Refresh
+  ArtCard --> OverlayPref["Blocked prefix if blocked_by"]
+  InboxCard --> OverlayPref
+  ArtCard --> CardBtn["continue button"]
+  InboxCard --> CardBtn
+  CardBtn -->|writeText ok| ClipOK["clipboard no toast"]
+  CardBtn -->|denied or missing| SelFb["selectNodeContents no toast"]
+  CardBtn -.->|stopPropagation does not toggle| GameSet
+  ArtCard -->|body click| NoMut["no expand no Archive no POST"]
+  InboxCard -->|body click| NoMut
+  ArtCard -->|draggable false| NoDrag["drop does not move"]
+  InboxCard -->|draggable false| NoDrag
+  Head -->|leave| Dash
+
+  Head --> UseP["useProjects list_projects"]
+  DeepGame["inbound tab=game"] --> PendGame["pendingGameDeepLink"]
+  PendGame -->|showGame| RestoreGame["replaceRoute game"]
+  RestoreGame --> GamePane
+  Deep["inbound tab=specs"] --> Pending["pendingSpecsDeepLink"]
+  Pending -->|showGame| ToGame["replaceRoute game"]
+  Pending -->|showSpecs| Restore["replaceRoute specs"]
+  Restore --> Specs
+  ToGame --> GamePane
+  Dash -->|Enter| Graph
+  Specs -->|loading and no board| LoadCopy["common.loading"]
+  Specs --> Poll["useSpecBoard 4s when pane open"]
+  Specs --> Toggle["Show archived session only"]
+  Specs -->|Archive / Unarchive| PostSB["POST /api/spec-board"]
+  Poll --> BoardGET["GET /api/spec-board"]
+  BoardGET --> HandleGET["handle_spec_board_get"]
+  HandleGET --> ReadSB["cbm_spec_board_read"]
+  GameGET["GET /api/game-board"] --> HandleGB["handle_game_board_get"]
+  HandleGB --> ReadGB["cbm_game_board_read"]
+  GdDir["root/.gamedev/ is dir?"] --> ReadGB
+  ReadGB -->|no| GameOff["200 present false; continue empty; arrays []"]
+  ReadGB -->|yes| StateMd["fopen rb .gamedev/state.md"]
+  StateMd --> Arts["exist-only pre/prod/post walk"]
+  Arts --> Own["compiled owner/track; status first token"]
+  Own --> Expand["Track A/B/H/playtest expand parse"]
+  StateMd --> BlockedLines["blocked lines cap 16"]
+  Expand --> Overlay["artifact owner match → work_state blocked"]
+  BlockedLines --> Overlay
+  StateMd --> GrillWalkGB["game_grill_* if .grill is dir"]
+  GrillWalkGB --> RegFile{"regular file epics_registry.md?"}
+  RegFile -->|yes| ParseReg["fopen rb parse; skip load_conv"]
+  ParseReg --> RegHide{"Plan slug AND Epic NNN AND hide-set?"}
+  RegHide -->|yes| OmitInbox["omit from inbox"]
+  RegHide -->|no| InboxGB["inbox[] kind epic; expand empty"]
+  RegFile -->|no missing or dir| ConvGB{"Companion-to exact OR slug+table NNN"}
+  ConvGB -->|yes| OmitInbox
+  ConvGB -->|no| InboxGB
+  Overlay --> MergeGA["HTTP apply matching card_id"]
+  Overlay --> GameDebtFile{"regular file backlog.md?"}
+  GameDebtFile -->|no missing or dir| GameDebtEmpty["debt_count 0"]
+  GameDebtFile -->|yes| GameDebtRead{"read_whole_file rb?"}
+  GameDebtRead -->|NULL| GameDebtEmpty
+  GameDebtRead -->|ok| GameDebtParse["parse debt: tags in game_board.c"]
+  GameDebtParse --> GameDebtCap["first 16 open; no resolved-by"]
+  ArchLoadGA["query-open + game_archive_load"] --> MergeGA
+  MergeGA --> GameJSON["to_json expand + blocked[] + archived + always debt[]"]
+  InboxGB --> GameJSON
+  OmitInbox --> GameJSON
+  GameOff --> GameJSON
+  GameDebtEmpty --> GameJSON
+  GameDebtCap --> GameJSON
+  AJ["active.json lists"] --> ReadSB
+  GrillDir["root/.grill/ is dir?"] --> ReadSB
+  ReadSB --> Enrich["every listed spec: one spec.md + one tasks.md"]
+  LogOnce["history/test_results.log once"] --> Dual["active bare Task #N / non-active id+Task #N"]
+  Dual --> Enrich
+  ReadSB --> GrillWalk["index.md rows + plans/*/epics"]
+  GrillWalk --> Omit["omit Companion-to or source.grill_epic"]
+  Omit --> EpicCap["first 64 remaining"]
+  ReadSB --> DebtFill["fopen rb TECH_DEBT.md after grill"]
+  DebtFill -->|missing or unreadable| DebtEmpty["debt_count 0"]
+  DebtFill -->|ok| DebtParse["heading Status then Debt Summary table"]
+  DebtParse --> DebtCap["first 16 open; omit rest"]
+  Enrich --> Merge["HTTP apply matching spec_id"]
+  ArchLoad["query-open + spec_archive_load"] --> Merge
+  Merge --> BoardJSON["to_json + blurb + archived + epics + always debt"]
+  EpicCap --> BoardJSON
+  DebtEmpty --> BoardJSON
+  DebtCap --> BoardJSON
+  BoardJSON --> HostGate{"sdd OR grill"}
+  HostGate -->|yes| TodoMix["Todo: EpicCard then SpecCard"]
+  HostGate -->|yes| OtherCols["In progress / Done SpecCard only"]
+  HostGate -->|!board or both false| LastResort["notSddSkill last-resort"]
+  TodoMix --> EpicPaint["EpicCard E + title truncate + id break-all"]
+  TodoMix --> SpecIdLock["SpecCard id truncate"]
+  OtherCols --> Filter["Done: hide archived unless showArchived"]
+  OtherCols --> SpecIdLock
+  EpicPaint -.->|no expand no POST| PostSB
+  PostSB --> HandlePOST["handle_spec_board_post"]
+  HandlePOST --> Find["spec_board_find specs only"]
+  Find -->|epic id or unknown spec| Epic404["404 spec not found"]
+  Find --> Validate["listed + column done"]
+  Epic404 --> NoWrite["no set"]
+  Validate -->|409/400| NoWrite
+  Validate --> Lock["mutation_begin like ADR"]
+  Lock -->|423 busy| NoWrite
+  Lock --> SetFlag["spec_archive_set"]
+  SetFlag --> FlagObj["200 project + spec_id + archived"]
+  FlagObj --> AwaitRef["await refresh GET"]
+  AwaitRef --> BoardGET
+  Specs --> ExpandSet["expandedIds Set by spec id"]
+  ExpandSet --> TitleBtn["SpecCard title button"]
+  TitleBtn --> BlurbReg["blurb region if non-empty"]
+  TitleBtn --> TaskFilt["TaskList: todo pending / else all"]
+  Adr -->|GET has CBM-GENERATED| AdrChrome["stamp formatIndexedAt + replace warning"]
+  AdrChrome --> UseP
+  Adr --> AdrAPI["GET/POST /api/adr one textarea"]
+
+  Dash --> List["Indexed Projects"]
+  Dash --> ControlEmb["ControlTab embedded"]
+  List --> UseP
+  UseP --> RPC["POST /rpc list_projects"]
+  RPC --> ListH["handle_list_projects"]
+  ListH --> Id["cbm_identity_canonical_root"]
+  Cat["cbm_identity_catalog_load"] --> DBs["cache *.db scan"]
+  DBs --> Id
+  ListH --> Daemon["C daemon"]
+
+  List --> Groups["pathGroups canonical_root"]
+  Groups -->|size >= 2| Conflict["conflict region Path once"]
+  Groups -->|solo| Solo["row Enter + Reindex + Delete"]
+  Conflict -->|Enter newest| App
+  Solo -->|Enter| App
+  Conflict -->|Delete per name| Del["DELETE /api/project?name="]
+  Solo -->|confirm Delete| Del
+  Conflict -->|Reindex per name| ReIdx["POST /api/index {root_path, project}"]
+  Solo -->|Reindex| ReIdx
+
+  Modal["CreateIndexModal root_path only"]
+  Modal -->|listed canonical_root| Skip["skip POST findNewestForPath"]
+  Modal -->|POST /api/index bare| Admit["cbm_identity_admit"]
+  ReIdx --> Admit
+  McpIdx["index_repository"] --> Admit
+  Admit -->|path_exists| Redirect["App openExistingProject"]
+  Skip --> Redirect
+  Redirect --> Notice["role=status + Graph"]
+  Admit -->|name_exists| Stay["modal stays body.error"]
+  Admit -->|202 create or reindex| Handle["handle_index_repository"]
+  McpIdx --> Handle
+  Watch["watcher / auto_watch"] -->|"adr_fill false"| Handle
+  Handle -->|want fill| Pipe["cbm_pipeline_run adr_fill"]
+  Pipe --> Cap["capture saved_adr"]
+  Cap -->|adr_fill true| Fill["cbm_adr_fill_document"]
+  Cap -->|adr_fill false| Pub["publish_staged"]
+  Fill --> Xor{"root/.gamedev is dir?"}
+  Xor -->|yes| GameTrio["fopen gamedev trio"]
+  Xor -->|no| SddDir{"root/.sdd-skill is dir?"}
+  SddDir -->|yes| SddTrio["fopen sdd trio"]
+  SddDir -->|no| NullFill["NULL prior blob"]
+  GameTrio --> Pub
+  SddTrio --> Pub
+  NullFill --> Pub
+  SkipDir["ALWAYS_SKIP .sdd-skill"] -.-> Pipe
+  Pub --> AdrWrite["adr_store if present"]
+  AdrWrite --> CopyArch["spec_archive + game_archive copy live→stage"]
+  CopyArch --> Store["project_summaries + spec_archive + game_archive"]
+  Store --> AdrAPI
+  Store --> MGet["manage_adr get"]
+  Handle -->|UI Reindex or create 202| Progress["IndexProgress stay Dashboard"]
+  Admit -->|Reindex HTTP error| Alert["role=alert stay Dashboard"]
+  Jobs["inflight + daemon path key"] --> Admit
+
+  Graph --> Colors["colorForLabel + EdgeLines locked"]

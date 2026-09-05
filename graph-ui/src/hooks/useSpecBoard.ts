@@ -1,3 +1,10 @@
+/**
+ * @sdd-task: Task #3 - SpecBoardTab filter + session toggle + Archive/Unarchive
+ * @sdd-spec: specs/spec-006-k3n-spec-archive/spec.md
+ * @sdd-decision: SDD-ADR-032 - Await GET refresh after 200; session-only Show archived
+ * @sdd-why: refresh must be the same fetchBoard Promise so POST 200 does not wait on the 4s poll
+ * @human-debug: If Archive hide snaps back → refresh is not fetchBoard or SpecBoardTab did not await it
+ */
 import { useCallback, useEffect, useState } from "react";
 import type { SpecBoard } from "../lib/types";
 
@@ -5,7 +12,7 @@ interface UseSpecBoardResult {
   board: SpecBoard | null;
   loading: boolean;
   error: string | null;
-  refresh: () => void;
+  refresh: () => Promise<void>;
 }
 
 /* Polls /api/spec-board — the active spec's current task/agent can change

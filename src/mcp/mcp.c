@@ -65,6 +65,7 @@ enum {
 #include "mcp/compact_out.h"
 #include "foundation/str_util.h"
 #include "foundation/workspace.h"
+#include "foundation/identity.h"
 #include "foundation/dump_verify.h"
 #include "foundation/compat_regex.h"
 #include "pipeline/artifact.h"
@@ -1536,6 +1537,35 @@ bool cbm_mcp_get_bool_arg(const char *args_json, const char *key) {
     return result;
 }
 
+/*
+ * @sdd-task: Task #2 - Pipeline hook + `.sdd-skill` skip
+ * @sdd-spec: specs/spec-004-j8k-adr-parse-on-reindex/spec.md
+ * @sdd-decision: SDD-ADR-019 default true unless JSON adr_fill is false
+ * @sdd-why: get_bool_arg defaults false; this gate must default true
+ * @human-debug: Explicit false ignored → val not a bool at :1554; hook is :8182
+ */
+bool cbm_mcp_index_want_adr_fill(const char *args_json) {
+    yyjson_doc *doc;
+    yyjson_val *root;
+    yyjson_val *val;
+    bool want = true;
+
+    if (!args_json || !args_json[0]) {
+        return true;
+    }
+    doc = yyjson_read(args_json, strlen(args_json), 0);
+    if (!doc) {
+        return true;
+    }
+    root = yyjson_doc_get_root(doc);
+    val = root ? yyjson_obj_get(root, "adr_fill") : NULL;
+    if (val && yyjson_is_bool(val) && !yyjson_get_bool(val)) {
+        want = false;
+    }
+    yyjson_doc_free(doc);
+    return want;
+}
+
 /* ══════════════════════════════════════════════════════════════════
  *  MCP SERVER
  * ══════════════════════════════════════════════════════════════════ */
@@ -2522,18 +2552,27 @@ static void build_project_json_entry(yyjson_mut_doc *doc, yyjson_mut_val *arr, c
         edges = cbm_store_count_edges(pstore, project_name);
     }
     char root_path_buf[CBM_SZ_1K] = "";
+    char indexed_at_buf[CBM_SZ_64] = "";
+    char canonical_buf[CBM_SZ_4K];
     cbm_project_t proj = {0};
     if (cbm_store_get_project(pstore, project_name, &proj) == CBM_STORE_OK) {
         if (proj.root_path) {
             snprintf(root_path_buf, sizeof(root_path_buf), "%s", proj.root_path);
         }
+        if (proj.indexed_at) {
+            snprintf(indexed_at_buf, sizeof(indexed_at_buf), "%s", proj.indexed_at);
+        }
         cbm_project_free_fields(&proj);
     }
     cbm_store_close(pstore);
+    cbm_identity_canonical_root(root_path_buf, canonical_buf, sizeof(canonical_buf));
 
     yyjson_mut_val *p = yyjson_mut_obj(doc);
     yyjson_mut_obj_add_strcpy(doc, p, "name", project_name);
     yyjson_mut_obj_add_strcpy(doc, p, "root_path", root_path_buf);
+    /* @sdd-task #1 spec-003 SDD-ADR-016: always emit, including metadata_only. */
+    yyjson_mut_obj_add_strcpy(doc, p, "indexed_at", indexed_at_buf);
+    yyjson_mut_obj_add_strcpy(doc, p, "canonical_root", canonical_buf);
     /* Listing stays lean: only the branch (the one git fact that
      * disambiguates same-repo projects). The 12-field git block — mostly
      * null for non-git roots — cost ~10KB across a full cache and is one
@@ -7890,8 +7929,11 @@ static bool resolve_session_repo_path(cbm_mcp_server_t *srv, char **repo_path) {
 }
 
 /* Preserve every index option while replacing all caller-supplied repo_path
- * keys with the one canonical path that was actually authorized. */
-static char *index_args_with_repo_path(const char *args, const char *canonical_repo_path) {
+ * keys with the one canonical path that was actually authorized. bind_name
+ * is the admit winner: daemon jobs key off args.name, so a no-name MCP
+ * reindex must carry the owning project or it would create a derived clone. */
+static char *index_args_with_repo_path(const char *args, const char *canonical_repo_path,
+                                       const char *bind_name) {
     if (!args || !canonical_repo_path) {
         return NULL;
     }
@@ -7913,6 +7955,13 @@ static char *index_args_with_repo_path(const char *args, const char *canonical_r
     if (!yyjson_mut_obj_add_strcpy(copy, copy_root, "repo_path", canonical_repo_path)) {
         yyjson_mut_doc_free(copy);
         return NULL;
+    }
+    if (bind_name && bind_name[0]) {
+        (void)yyjson_mut_obj_remove_key(copy_root, "name");
+        if (!yyjson_mut_obj_add_strcpy(copy, copy_root, "name", bind_name)) {
+            yyjson_mut_doc_free(copy);
+            return NULL;
+        }
     }
     char *rewritten = yy_doc_to_str(copy);
     yyjson_mut_doc_free(copy);
@@ -8003,10 +8052,36 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
         return result;
     }
 
+    /* @sdd-task: Task #2 MCP admit before executor/pipeline. isError text has
+     * path_exists|name_exists. Empty name + one owner → bind that project. */
+    {
+        char *derived = cbm_project_name_from_path(repo_path);
+        cbm_identity_admit_result_t adm;
+        cbm_identity_admit(cbm_resolve_cache_dir(), repo_path, derived, name_override,
+                           CBM_IDENTITY_INTENT_MCP, NULL, 0, &adm);
+        free(derived);
+        if (adm.verdict == CBM_IDENTITY_ADMIT_PATH_EXISTS ||
+            adm.verdict == CBM_IDENTITY_ADMIT_NAME_EXISTS) {
+            char msg[CBM_SZ_1K];
+            const char *code =
+                adm.verdict == CBM_IDENTITY_ADMIT_NAME_EXISTS ? "name_exists" : "path_exists";
+            snprintf(msg, sizeof(msg), "%s: existing project %s", code, adm.existing_project);
+            free(mode_str);
+            free(name_override);
+            free(repo_path);
+            return cbm_mcp_text_result(msg, true);
+        }
+        if (adm.verdict == CBM_IDENTITY_ADMIT_REINDEX && (!name_override || !name_override[0]) &&
+            adm.bind_project[0]) {
+            free(name_override);
+            name_override = heap_strdup(adm.bind_project);
+        }
+    }
+
     /* A daemon session delegates the one physical write to its shared job
      * registry only after path canonicalization and workspace authorization. */
     if (srv->index_executor) {
-        char *worker_args = index_args_with_repo_path(args, repo_path);
+        char *worker_args = index_args_with_repo_path(args, repo_path, name_override);
         char *coordinated =
             worker_args ? srv->index_executor(srv->index_executor_context, repo_path, worker_args)
                         : NULL;
@@ -8038,7 +8113,7 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
      * installs the same guard before running the in-process pipeline. A marked
      * host fails closed if preparation or worker startup cannot complete. */
     if (cbm_index_supervisor_should_wrap()) {
-        char *worker_args = index_args_with_repo_path(args, repo_path);
+        char *worker_args = index_args_with_repo_path(args, repo_path, name_override);
         if (!worker_args) {
             free(mutation_project);
             free(repo_path);
@@ -8110,6 +8185,8 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     }
     free(name_override);
     cbm_pipeline_set_persistence(p, persistence);
+    /* @sdd-task: Task #2 — in-process default fill on unless args have adr_fill:false */
+    cbm_pipeline_set_adr_fill(p, cbm_mcp_index_want_adr_fill(args));
 
     char *project_name = heap_strdup(cbm_pipeline_project_name(p));
 

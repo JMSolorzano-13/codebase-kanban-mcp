@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #3 - formatIndexedAt
- * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
- * @sdd-decision: SDD-ADR-003 - indexed_at shown as UTC locale via time[dateTime]
- * @sdd-why: US-002 freshness — visible datetime derived from ISO, not raw ISO only
- * @human-debug: If output equals raw ISO → Date parse failed (invalid input) or locale options dropped
+ * @sdd-task: Task #1 - Drop UTC pin in formatIndexedAt + helper oracles
+ * @sdd-spec: specs/spec-007-n6p-last-indexed-local/spec.md
+ * @sdd-decision: SDD-ADR-034 - indexed_at visible text uses runtime TZ; dateTime/title stay ISO
+ * @sdd-why: US-001 / US-006 helper — drop timeZone pin so every caller shows host wall clock
+ * @human-debug: If output equals raw ISO → Date parse failed or options dropped; if still UTC while host is not → timeZone leaked back into INDEXED_AT_PARTS
  */
 
 export type IndexedAtLang = "en" | "zh";
@@ -13,13 +13,12 @@ const LOCALE_BY_LANG: Record<IndexedAtLang, string> = {
   zh: "zh-CN",
 };
 
-const UTC_PARTS: Intl.DateTimeFormatOptions = {
+const INDEXED_AT_PARTS: Intl.DateTimeFormatOptions = {
   year: "numeric",
   month: "numeric",
   day: "numeric",
   hour: "numeric",
   minute: "numeric",
-  timeZone: "UTC",
   timeZoneName: "short",
 };
 
@@ -28,5 +27,5 @@ export function formatIndexedAt(iso: string, lang: IndexedAtLang): string {
   if (Number.isNaN(date.getTime())) {
     return iso;
   }
-  return new Intl.DateTimeFormat(LOCALE_BY_LANG[lang], UTC_PARTS).format(date);
+  return new Intl.DateTimeFormat(LOCALE_BY_LANG[lang], INDEXED_AT_PARTS).format(date);
 }

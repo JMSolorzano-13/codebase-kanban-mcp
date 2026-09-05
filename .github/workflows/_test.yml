@@ -428,9 +428,9 @@ jobs:
             zip
 
       - name: Create protected per-user temp root
-        # One implementation, shared with _soak.yml and the VM leg
-        # (test-infrastructure/vm/vm-run-tests.sh) — see the script's header for
-        # why the harness cannot run under a shared or ACL-inherited temp.
+        # Shared with the VM leg (test-infrastructure/vm/vm-run-tests.sh) —
+        # see the script's header for why the harness cannot run under a
+        # shared or ACL-inherited temp.
         shell: pwsh
         run: |
           $root = & scripts/ci/new-protected-temp-root.ps1 `

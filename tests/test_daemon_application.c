@@ -2692,6 +2692,48 @@ TEST(daemon_application_coalesces_semantically_identical_index_requests) {
     PASS();
 }
 
+/*
+ * @sdd-task: Task #2 - Pipeline hook + `.sdd-skill` skip
+ * @sdd-spec: specs/spec-004-j8k-adr-parse-on-reindex/spec.md
+ * @sdd-decision: SDD-ADR-019 watcher args false; strip for subscribe
+ * @sdd-why: Flag/args Gherkin without a live auto_watch poll
+ * @human-debug: equal fails → application.c:1581 strip; missing key in watcher JSON → :3397
+ */
+TEST(daemon_application_watcher_args_adr_fill_false_strips_for_subscribe) {
+    char root[APP_TEST_PATH_CAP];
+    char canonical[APP_TEST_PATH_CAP];
+    char *project;
+    char *watcher_args;
+    char user_args[APP_TEST_PATH_CAP + 64];
+    bool root_ok;
+    bool canon_ok;
+
+    snprintf(root, sizeof(root), "%s/cbm-app-adrfill-XXXXXX", cbm_tmpdir());
+    root_ok = cbm_mkdtemp(root) != NULL;
+    canon_ok = root_ok && cbm_canonical_path(root, canonical, sizeof(canonical));
+    project = canon_ok ? cbm_project_name_from_path(canonical) : NULL;
+    watcher_args =
+        (canon_ok && project) ? cbm_daemon_application_watcher_index_args_for_test(root, project)
+                              : NULL;
+    if (canon_ok) {
+        snprintf(user_args, sizeof(user_args), "{\"repo_path\":\"%s\"}", canonical);
+    }
+
+    ASSERT_TRUE(root_ok);
+    ASSERT_TRUE(canon_ok);
+    ASSERT_NOT_NULL(project);
+    ASSERT_NOT_NULL(watcher_args);
+    ASSERT_NOT_NULL(strstr(watcher_args, "\"adr_fill\":false"));
+    ASSERT_TRUE(cbm_daemon_application_index_args_equal_for_test(watcher_args, user_args));
+    ASSERT_FALSE(cbm_mcp_index_want_adr_fill(watcher_args));
+    ASSERT_TRUE(cbm_mcp_index_want_adr_fill(user_args));
+
+    free(watcher_args);
+    free(project);
+    (void)cbm_rmdir(root);
+    PASS();
+}
+
 TEST(daemon_application_fresh_request_does_not_reuse_terminal_subscribed_job) {
     enum { PRIOR_SUBSCRIBERS = 16 };
     static const char stale_response[] =
@@ -5106,6 +5148,7 @@ SUITE(daemon_application) {
     RUN_TEST(daemon_application_update_generation_retries_cancelled_check);
     RUN_TEST(daemon_application_final_disconnect_cancels_and_joins_update_generation);
     RUN_TEST(daemon_application_coalesces_semantically_identical_index_requests);
+    RUN_TEST(daemon_application_watcher_args_adr_fill_false_strips_for_subscribe);
     RUN_TEST(daemon_application_fresh_request_does_not_reuse_terminal_subscribed_job);
     RUN_TEST(daemon_application_request_cancel_detaches_only_one_coalesced_subscriber);
     RUN_TEST(daemon_application_cancels_physical_job_only_after_final_session);

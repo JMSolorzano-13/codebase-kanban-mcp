@@ -1,0 +1,23 @@
+# glossary — tech-debt-and-epics-registry
+
+- sdd-debt-file: `.sdd-skill/baseline/TECH_DEBT.md` — TD-NNN register; one item→one spec; not a queue
+- gamedev-debt-file: `.gamedev/backlog.md` — debt:gate-* / debt:adopt-gap-* / debt:<slug>; no TECH_DEBT.md
+- epics_registry: `.gamedev/epics_registry.md` — lazy table; @director sole writer; epic↔SYS + status; RO toward .grill/
+- registry-status: not_started | in_progress | closed | parked | evergreen (Epic 0 only)
+- registry-match: Plan=grill slug AND Epic=NNN; no kebab/path fuzzy (ADR-003)
+- registry-hide-set: hide Inbox iff status ∈ {in_progress, closed, parked}; not_started + no-row stay (ADR-003)
+- registry-else-adr006: file present → ADR-003 only; file absent → prior Game ADR-006 (ADR-004)
+- unconverted-specs: omit Todo epic iff Companion-to exact path OR active.json source.grill_epic — unchanged (ADR-005)
+- unconverted-game-absent-registry: omit Inbox iff Companion-to exact OR roadmap slug+NNN (prior ADR-006)
+- debt-chrome: open-debt list in board chrome; not a column; not a Todo/Inbox card (ADR-001)
+- open-sdd-debt: TD-NNN Status ≠ resolved (ADR-002)
+- open-gamedev-debt: backlog line with debt:* and no resolved-by (ADR-002)
+- epic-card-id: repo-relative `.grill/plans/<slug>/epics/epic-NNN-<name>.md`
+- epic-short-name: `name:` field as card title — keep
+- path-wrap: id line wraps; no CSS truncate; Specs Todo + Game Inbox (ADR-006)
+- same-get-additive: GET /api/spec-board + GET /api/game-board only; hide server-side (ADR-007)
+- specs-debt-strip: board strip above Specs 3 cols; omit if empty (ADR-008)
+- specs-debt-row: TD-NNN + title; heading/file order; no severity/color (ADR-008)
+- registry-present: `.gamedev/epics_registry.md` exists on disk (even 0 parsed rows) → ADR-003 only, no ADR-006 fallthrough (ADR-004)
+- game-debt-strip: board strip after BlockedStrip, before Game 4 cols; omit if empty (ADR-009)
+- game-debt-row: debt:* tag + description; file/entry order; no owner/target/color (ADR-009)

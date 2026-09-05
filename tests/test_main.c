@@ -604,6 +604,7 @@ extern void suite_str_intern(void);
 extern void suite_log(void);
 extern void suite_str_util(void);
 extern void suite_workspace(void);
+extern void suite_identity(void);
 extern void suite_platform(void);
 extern void suite_diagnostics(void);
 extern void suite_subprocess(void);
@@ -673,6 +674,8 @@ extern void suite_store_arch(void);
 extern void suite_store_bulk(void);
 extern void suite_store_pragmas(void);
 extern void suite_store_checkpoint(void);
+extern void suite_store_spec_archive(void);
+extern void suite_store_game_archive(void);
 extern void suite_traces(void);
 extern void suite_configlink(void);
 extern void suite_infrascan(void);
@@ -706,6 +709,8 @@ extern void suite_call_reference_contract(void);
 extern void suite_mem(void);
 extern void suite_ui(void);
 extern void suite_spec_board(void);
+extern void suite_game_board(void);
+extern void suite_adr_fill(void);
 extern void suite_httpd(void);
 extern void suite_security(void);
 extern void suite_yaml(void);
@@ -851,6 +856,7 @@ int main(int argc, char **argv) {
     RUN_SELECTED_SUITE(log);
     RUN_SELECTED_SUITE(str_util);
     RUN_SELECTED_SUITE(workspace);
+    RUN_SELECTED_SUITE(identity);
     RUN_SELECTED_SUITE(platform);
     RUN_SELECTED_SUITE(diagnostics);
     RUN_SELECTED_SUITE(subprocess);
@@ -875,6 +881,8 @@ int main(int argc, char **argv) {
     RUN_SELECTED_SUITE(store_bulk);
     RUN_SELECTED_SUITE(store_pragmas);
     RUN_SELECTED_SUITE(store_checkpoint);
+    RUN_SELECTED_SUITE(store_spec_archive);
+    RUN_SELECTED_SUITE(store_game_archive);
     RUN_SELECTED_SUITE(dump_verify_io);
 
     /* Cypher (M6) */
@@ -1002,6 +1010,8 @@ int main(int argc, char **argv) {
     /* UI (config, external asset pack, layout) */
     RUN_SELECTED_SUITE(ui);
     RUN_SELECTED_SUITE(spec_board);
+    RUN_SELECTED_SUITE(game_board);
+    RUN_SELECTED_SUITE(adr_fill);
 
     /* UI HTTP server (transport + routing) */
     RUN_SELECTED_SUITE(httpd);

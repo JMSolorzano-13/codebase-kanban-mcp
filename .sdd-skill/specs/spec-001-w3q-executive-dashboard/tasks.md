@@ -139,4 +139,4 @@ Do not expand to spec-002/003/004. Do not edit C. Do not call `index_repository`
 Happy path + limit + error Gherkin above. Target >80% on touched graph-ui files. Every scenario maps to at least one task test (see per-task Gherkin covered).
 
 ## Success Criteria for All Tasks
-- [ ] all DoD complete [ ] tests>80% [ ] passes @review [ ] @tester approves [ ] human docs complete
+- [x] all DoD complete [ ] tests>80% (reporter not installed; 70/70 Vitest) [x] passes @review [x] @tester approves [x] human docs complete

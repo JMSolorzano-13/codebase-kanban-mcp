@@ -201,6 +201,7 @@ TEST(invariant_discovery_always_skip_dirs) {
         { "vendor",                  1 }, /* GREEN */
         { "vendored",                1 }, /* GREEN */
         { ".qdrant_code_embeddings", 1 }, /* GREEN */
+        { ".sdd-skill",              1 }, /* GREEN — SDD-ADR-023 */
 
         /*
          * .claude-worktrees was QUALITY_ANALYSIS gap #1 (a RED reproduction): the

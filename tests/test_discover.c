@@ -97,6 +97,45 @@ TEST(skip_claude) {
     ASSERT_TRUE(cbm_should_skip_dir(".claude", CBM_MODE_FULL));
     PASS();
 }
+/*
+ * @sdd-task: Task #2 - Pipeline hook + `.sdd-skill` skip
+ * @sdd-spec: specs/spec-004-j8k-adr-parse-on-reindex/spec.md
+ * @sdd-decision: SDD-ADR-023 ALWAYS_SKIP
+ * @sdd-why: Dir skip + trio must not appear as File nodes
+ * @human-debug: skip_sdd_skill false → ALWAYS_SKIP missing `.sdd-skill` (discover.c:52)
+ */
+TEST(skip_sdd_skill) {
+    ASSERT_TRUE(cbm_should_skip_dir(".sdd-skill", CBM_MODE_FULL));
+    PASS();
+}
+
+/* Trio files must not become graph File nodes (SDD-ADR-023). */
+TEST(discover_skips_sdd_skill_trio) {
+    char *base = th_mktempdir("cbm_disc_sdd");
+    cbm_discover_opts_t opts = {0};
+    cbm_file_info_t *files = NULL;
+    int count = 0;
+    int rc;
+    int i;
+
+    ASSERT(base != NULL);
+    th_write_file(TH_PATH(base, "src/foo.c"), "int foo(void) { return 1; }\n");
+    th_write_file(TH_PATH(base, ".sdd-skill/context_ai.md"), "PURPOSE-NOT-A-FILE-NODE\n");
+    th_write_file(TH_PATH(base, ".sdd-skill/baseline/TECH_STACK.md"), "STACK-NOT-A-FILE-NODE\n");
+    th_write_file(TH_PATH(base, ".sdd-skill/baseline/ARCHITECTURE_ADR.md"),
+                  "DECISION-NOT-A-FILE-NODE\n");
+
+    rc = cbm_discover(base, &opts, &files, &count);
+    ASSERT_EQ(rc, 0);
+    ASSERT_TRUE(discover_has_rel_path(files, count, "src/foo.c"));
+    for (i = 0; i < count; i++) {
+        ASSERT(strstr(files[i].rel_path, ".sdd-skill") == NULL);
+        ASSERT(strstr(files[i].rel_path, "context_ai.md") == NULL);
+    }
+    cbm_discover_free(files, count);
+    th_cleanup(base);
+    PASS();
+}
 
 /* Not skipped in full mode */
 TEST(no_skip_src) {
@@ -1412,6 +1451,8 @@ SUITE(discover) {
     RUN_TEST(skip_coverage);
     RUN_TEST(skip_idea);
     RUN_TEST(skip_claude);
+    RUN_TEST(skip_sdd_skill);
+    RUN_TEST(discover_skips_sdd_skill_trio);
 
     /* Not skipped */
     RUN_TEST(no_skip_src);

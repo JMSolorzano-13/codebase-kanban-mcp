@@ -1,9 +1,9 @@
 /**
- * @sdd-task: Task #5 - App routing + TabBar delete
- * @sdd-spec: specs/spec-001-w3q-executive-dashboard/spec.md
- * @sdd-decision: SDD-ADR-008 - TabId dashboard|graph; stats/control/specs alias home
- * @sdd-why: Account IA is Dashboard home + Graph enter; leftover tab ids invited the old strip
- * @human-debug: If a tab id is not dashboard|graph → types drifted; aliases live in App readRoute
+ * @sdd-task: Task #3 - GameBoardTab strip + leftover Vitest
+ * @sdd-spec: specs/spec-017-b4w-game-debt-chrome/spec.md
+ * @sdd-decision: SDD-ADR-072 always-emit debt; SDD-ADR-074 Game-only strip
+ * @sdd-why: GameBoard.debt?: GameBoardDebt[] (id, title); missing treated as []
+ * @human-debug: If Game strip throws on old mocks → debt not optional; if Specs shows Game ids → wrong board
  */
 /* Graph data types matching the C layout3d.c JSON output */
 
@@ -78,6 +78,8 @@ export interface Project {
   name: string;
   root_path: string;
   indexed_at: string;
+  /** Server realpath of root_path; absent on pre-spec-003 daemons. */
+  canonical_root?: string;
 }
 
 export interface SchemaInfo {
@@ -87,7 +89,14 @@ export interface SchemaInfo {
   total_edges: number;
 }
 
-export type TabId = "dashboard" | "graph";
+/** Closed set. Const order is not strip display order (Game shown: Graph | Game | ADR). */
+export const WORKSPACE_TABS = ["graph", "specs", "adr", "game"] as const;
+export type WorkspaceTabId = (typeof WORKSPACE_TABS)[number];
+export type TabId = "dashboard" | WorkspaceTabId;
+
+export function isWorkspaceTab(tab: string | null): tab is WorkspaceTabId {
+  return tab !== null && (WORKSPACE_TABS as readonly string[]).includes(tab);
+}
 
 /* Spec board (sdd-skill Kanban) — matches spec_board.c's JSON output.
  * Zero-write / best-effort: everything here is derived from files sdd-skill's
@@ -106,7 +115,9 @@ export type SpecColumn = "todo" | "in_progress" | "done";
 export interface SpecBoardEntry {
   id: string;
   title: string;
+  blurb: string;
   column: SpecColumn;
+  archived?: boolean;
   active: boolean;
   current_agent: string;
   blocked_note: string;
@@ -116,9 +127,83 @@ export interface SpecBoardEntry {
   tasks: SpecTask[];
 }
 
+export interface SpecBoardEpic {
+  kind: "epic";
+  id: string;
+  title: string;
+  summary: string;
+  plan_title: string;
+  column: "todo";
+}
+
+export interface SpecBoardDebt {
+  id: string;
+  title: string;
+}
+
 export interface SpecBoard {
   sdd_skill_present: boolean;
+  grill_skill_present?: boolean;
   specs: SpecBoardEntry[];
+  epics?: SpecBoardEpic[];
+  debt?: SpecBoardDebt[];
+}
+
+/** GET /api/game-board JSON. Arrays are card objects; pane paints them. */
+export type GamePhase = "01-preproduction" | "02-production" | "03-postproduction";
+
+export type GameBoardTrack = "A" | "B" | "H";
+
+export type GameBoardWorkState = "pending" | "in_progress" | "done" | "blocked";
+
+export interface GameBoardTask {
+  number: number;
+  name: string;
+  done: boolean;
+}
+
+export interface GameBoardBlocked {
+  owner: string;
+  task: string;
+  blocked_by: string;
+}
+
+export interface GameBoardDebt {
+  id: string;
+  title: string;
+}
+
+export interface GameBoardCard {
+  kind: "artifact" | "epic";
+  id: string;
+  title: string;
+  track: GameBoardTrack | null;
+  work_state: GameBoardWorkState | null;
+  owner: string;
+  continue: string;
+  summary: string;
+  plan_title: string;
+  blurb: string;
+  tasks: GameBoardTask[];
+  inputs: string;
+  last_decision: string;
+  open: string;
+  recent: string;
+  blocked_by: string | null;
+  archived: boolean;
+}
+
+export interface GameBoard {
+  gamedev_skill_present: boolean;
+  phase: GamePhase | null;
+  focus: string | null;
+  continue: string;
+  blocked: GameBoardBlocked[];
+  inbox: GameBoardCard[];
+  preproduction: GameBoardCard[];
+  production: GameBoardCard[];
+  postproduction: GameBoardCard[];
+  debt?: GameBoardDebt[];
 }
 
 export interface ProcessInfo {

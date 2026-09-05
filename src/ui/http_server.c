@@ -18,6 +18,7 @@
 #include "ui/embedded_assets.h"
 #include "ui/layout3d.h"
 #include "ui/spec_board.h"
+#include "ui/game_board.h"
 #include "mcp/mcp.h"
 #include "store/store.h"
 #include "watcher/watcher.h"
@@ -39,6 +40,8 @@
 #include "foundation/subprocess.h" /* cbm_build_win_cmdline — shared MS-CRT arg quoting */
 #include "foundation/win_utf8.h"   /* cbm_utf8_to_wide — CreateProcessW wide cmdline (#423/#20) */
 #include "foundation/workspace.h"
+#include "foundation/identity.h"
+#include "pipeline/pipeline.h"
 
 #include <sqlite3/sqlite3.h>
 #include <yyjson/yyjson.h>
@@ -427,11 +430,62 @@ static bool resolve_project_root_path(const char *project, char *root_path, size
     return ok;
 }
 
-/* GET /api/spec-board?project=X → sdd-skill Kanban board for that project.
- * Zero-write, best-effort: {"sdd_skill_present":false} when the project has
- * no .sdd-skill/ folder (not an error — the tab hides itself in that case).
- * See spec_board.h/.c for exactly what is read and the known limitations. */
-static void handle_spec_board(cbm_http_conn_t *c, const cbm_http_req_t *req) {
+/**
+ * @sdd-task: Task #2 - HTTP GET additive + POST epic-id 404
+ * @sdd-spec: specs/spec-008-g8r-grill-epic-todo/spec.md
+ * @sdd-decision: SDD-ADR-030 merge after read; SDD-ADR-036 grill IO in spec_board.c
+ * @sdd-why: archive flags stay spec-only; epics[] must not gain archived or other merge fields
+ * @human-debug: GET archived always false → query-open/load failed (degrades, still 200)
+ *
+ * spec-006 Task #2: merge after cbm_spec_board_read; flags live in the project .db.
+ */
+static void spec_board_apply_archive_flags(cbm_spec_board_t *board, const char *project) {
+    char db_path[1024];
+    cbm_store_t *store;
+    cbm_spec_archive_row_t rows[CBM_SPEC_ARCHIVE_CAP];
+    int n = 0;
+    int i;
+    int j;
+
+    if (!board || !project || !project[0]) {
+        return;
+    }
+    db_path_for_project(project, db_path, sizeof(db_path));
+    if (db_path[0] == '\0') {
+        return;
+    }
+    store = cbm_store_open_path_query(db_path);
+    if (!store) {
+        return;
+    }
+    if (cbm_store_spec_archive_load(store, rows, CBM_SPEC_ARCHIVE_CAP, &n) != CBM_STORE_OK) {
+        cbm_store_close(store);
+        return;
+    }
+    /* specs[] only — never walk epics[] (spec-008; epics have no archived field). */
+    for (i = 0; i < board->spec_count; i++) {
+        cbm_spec_board_entry_t *e = &board->specs[i];
+        for (j = 0; j < n; j++) {
+            if (strcmp(e->id, rows[j].spec_id) == 0) {
+                e->archived = rows[j].archived != 0;
+                break;
+            }
+        }
+    }
+    cbm_store_close(store);
+}
+
+/**
+ * @sdd-task: Task #2 - HTTP GET additive + POST epic-id 404
+ * @sdd-spec: specs/spec-008-g8r-grill-epic-todo/spec.md
+ * @sdd-decision: SDD-ADR-035 additive GET keys; SDD-ADR-036 no grill fopen here
+ * @sdd-why: same GET; grill parse stays in cbm_spec_board_read; to_json is additive
+ * @human-debug: 404 not {"error":"project not found"} → resolve_project_root_path failed open
+ *
+ * GET /api/spec-board?project=X → board JSON. Dispatch is read → archive merge
+ * (specs only) → to_json. Do not fopen .grill/ here. Unknown project stays 404.
+ */
+static void handle_spec_board_get(cbm_http_conn_t *c, const cbm_http_req_t *req) {
     char project[256] = {0};
     if (!cbm_http_query_param(req->query, "project", project, (int)sizeof(project)) ||
         project[0] == '\0') {
@@ -452,6 +506,7 @@ static void handle_spec_board(cbm_http_conn_t *c, const cbm_http_req_t *req) {
         return;
     }
     cbm_spec_board_read(root_path, board);
+    spec_board_apply_archive_flags(board, project);
 
     char *json = cbm_spec_board_to_json(board);
     free(board);
@@ -461,6 +516,442 @@ static void handle_spec_board(cbm_http_conn_t *c, const cbm_http_req_t *req) {
     }
     cbm_http_replyf(c, 200, g_cors_json, "%s", json);
     free(json);
+}
+
+/**
+ * @sdd-task: Task #3 - HTTP POST + GET merge + C Gherkin + publish copy
+ * @sdd-spec: specs/spec-012-m2k-game-expand-archive-deps/spec.md
+ * @sdd-decision: SDD-ADR-053 merge after read; matching ids only
+ * @sdd-why: game_archive lives in the project .db; missing table/open fail → all false, still 200
+ * @human-debug: GET archived always false → query-open/load failed (degrades, still 200)
+ *
+ * Walk all four arrays. Orphan store row does not invent a card. Inbox flags
+ * apply only when an id already listed (POST 404s epics, so leftover only).
+ */
+static void game_board_apply_flags_to_array(cbm_game_board_card_t *arr, int count,
+                                           const cbm_game_archive_row_t *rows, int n) {
+    int i;
+    int j;
+
+    if (!arr || !rows) {
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        for (j = 0; j < n; j++) {
+            if (strcmp(arr[i].id, rows[j].card_id) == 0) {
+                arr[i].archived = rows[j].archived != 0;
+                break;
+            }
+        }
+    }
+}
+
+static void game_board_apply_archive_flags(cbm_game_board_t *board, const char *project) {
+    char db_path[1024];
+    cbm_store_t *store;
+    cbm_game_archive_row_t *rows;
+    int n = 0;
+
+    if (!board || !project || !project[0]) {
+        return;
+    }
+    db_path_for_project(project, db_path, sizeof(db_path));
+    if (db_path[0] == '\0') {
+        return;
+    }
+    store = cbm_store_open_path_query(db_path);
+    if (!store) {
+        return;
+    }
+    /* CAP 512 is too large for stack; missing table/load fail → leave flags false. */
+    rows = calloc((size_t)CBM_GAME_ARCHIVE_CAP, sizeof(*rows));
+    if (!rows) {
+        cbm_store_close(store);
+        return;
+    }
+    if (cbm_store_game_archive_load(store, rows, CBM_GAME_ARCHIVE_CAP, &n) != CBM_STORE_OK) {
+        free(rows);
+        cbm_store_close(store);
+        return;
+    }
+    game_board_apply_flags_to_array(board->inbox, board->inbox_count, rows, n);
+    game_board_apply_flags_to_array(board->preproduction, board->preproduction_count, rows, n);
+    game_board_apply_flags_to_array(board->production, board->production_count, rows, n);
+    game_board_apply_flags_to_array(board->postproduction, board->postproduction_count, rows, n);
+    free(rows);
+    cbm_store_close(store);
+}
+
+/**
+ * @sdd-task: Task #3 - HTTP POST + GET merge + C Gherkin + publish copy
+ * @sdd-spec: specs/spec-012-m2k-game-expand-archive-deps/spec.md
+ * @sdd-decision: SDD-ADR-053 HTTP merge after cbm_game_board_read
+ * @sdd-why: same GET family; flags never invented as cards; skill reader stays SQLite-free
+ * @human-debug: If GET 500 → calloc/to_json; if archived stuck false → merge skipped
+ *
+ * GET /api/game-board?project=X → board JSON. Dispatch is read → archive merge
+ * (four arrays) → to_json. Missing table / open fail → all archived false, 200.
+ */
+static void handle_game_board_get(cbm_http_conn_t *c, const cbm_http_req_t *req) {
+    char project[256] = {0};
+    if (!cbm_http_query_param(req->query, "project", project, (int)sizeof(project)) ||
+        project[0] == '\0') {
+        cbm_http_replyf(c, 400, g_cors_json, "{\"error\":\"missing project parameter\"}");
+        return;
+    }
+
+    char root_path[1024];
+    if (!resolve_project_root_path(project, root_path, sizeof(root_path))) {
+        cbm_http_replyf(c, 404, g_cors_json, "{\"error\":\"project not found\"}");
+        return;
+    }
+
+    cbm_game_board_t *board = calloc(1, sizeof(*board));
+    if (!board) {
+        cbm_http_replyf(c, 500, g_cors_json, "{\"error\":\"out of memory\"}");
+        return;
+    }
+    cbm_game_board_read(root_path, board);
+    game_board_apply_archive_flags(board, project);
+
+    char *json = cbm_game_board_to_json(board);
+    free(board);
+    if (!json) {
+        cbm_http_replyf(c, 500, g_cors_json, "{\"error\":\"board serialization failed\"}");
+        return;
+    }
+    cbm_http_replyf(c, 200, g_cors_json, "%s", json);
+    free(json);
+}
+
+#define GAME_BOARD_POST_MAX 4096
+
+/**
+ * @sdd-task: Task #3 - HTTP POST + GET merge + C Gherkin + publish copy
+ * @sdd-spec: specs/spec-012-m2k-game-expand-archive-deps/spec.md
+ * @sdd-decision: SDD-ADR-053 Inbox epic → 404 even if somehow done
+ * @sdd-why: Archive is artifact-only; kind epic is never a persistable card_id
+ * @human-debug: POST inbox 200 → find did not reject kind epic
+ */
+static const cbm_game_board_card_t *game_board_find_in(const cbm_game_board_card_t *arr, int count,
+                                                      const char *card_id) {
+    int i;
+    if (!arr || !card_id || !card_id[0]) {
+        return NULL;
+    }
+    for (i = 0; i < count; i++) {
+        if (strcmp(arr[i].id, card_id) == 0) {
+            return &arr[i];
+        }
+    }
+    return NULL;
+}
+
+static const cbm_game_board_card_t *game_board_find(const cbm_game_board_t *board,
+                                                   const char *card_id) {
+    const cbm_game_board_card_t *c;
+    if (!board || !card_id || !card_id[0]) {
+        return NULL;
+    }
+    c = game_board_find_in(board->inbox, board->inbox_count, card_id);
+    if (!c) {
+        c = game_board_find_in(board->preproduction, board->preproduction_count, card_id);
+    }
+    if (!c) {
+        c = game_board_find_in(board->production, board->production_count, card_id);
+    }
+    if (!c) {
+        c = game_board_find_in(board->postproduction, board->postproduction_count, card_id);
+    }
+    if (!c) {
+        return NULL;
+    }
+    if (strcmp(c->kind, "epic") == 0) {
+        return NULL;
+    }
+    return c;
+}
+
+/**
+ * @sdd-task: Task #3 - HTTP POST + GET merge + C Gherkin + publish copy
+ * @sdd-spec: specs/spec-012-m2k-game-expand-archive-deps/spec.md
+ * @sdd-decision: SDD-ADR-053 POST flag object; 409 after overlay; mutation lock
+ * @sdd-why: GET-only cannot persist; 200 is not the board; zero skill writes
+ * @human-debug: 409 still persisted → set ran before work_state check; inbox 200 → kind epic not rejected
+ *
+ * POST /api/game-board {project, card_id, archived} → flag object (not the board).
+ * Inbox/unknown → 404 {"error":"card not found"} before any store write.
+ * Overlay blocked / pending → 409 {"error":"card not done"}.
+ */
+static void handle_game_board_post(cbm_http_server_t *srv, cbm_http_conn_t *c,
+                                   const cbm_http_req_t *req) {
+    yyjson_doc *doc;
+    yyjson_val *root;
+    yyjson_val *v_proj;
+    yyjson_val *v_cid;
+    yyjson_val *v_arch;
+    char project[256] = {0};
+    char card_id[256] = {0};
+    char root_path[1024];
+    char db_path[1024];
+    char esc_proj[512];
+    char esc_id[768];
+    cbm_game_board_t *board;
+    const cbm_game_board_card_t *entry;
+    cbm_store_t *store;
+    bool archived;
+    bool mutation_held;
+    int rc;
+
+    if (!req->body || req->body_len == 0 || req->body_len > GAME_BOARD_POST_MAX) {
+        cbm_http_replyf(c, 400, g_cors_json, "{\"error\":\"invalid body\"}");
+        return;
+    }
+
+    doc = yyjson_read(req->body, req->body_len, 0);
+    if (!doc) {
+        cbm_http_replyf(c, 400, g_cors_json, "{\"error\":\"invalid json\"}");
+        return;
+    }
+
+    root = yyjson_doc_get_root(doc);
+    v_proj = yyjson_obj_get(root, "project");
+    v_cid = yyjson_obj_get(root, "card_id");
+    v_arch = yyjson_obj_get(root, "archived");
+    if (!v_arch || !yyjson_is_bool(v_arch)) {
+        yyjson_doc_free(doc);
+        cbm_http_replyf(c, 400, g_cors_json, "{\"error\":\"invalid archived\"}");
+        return;
+    }
+    if (!v_proj || !yyjson_is_str(v_proj) || !v_cid || !yyjson_is_str(v_cid)) {
+        yyjson_doc_free(doc);
+        cbm_http_replyf(c, 400, g_cors_json, "{\"error\":\"missing project or card_id\"}");
+        return;
+    }
+
+    {
+        const char *proj = yyjson_get_str(v_proj);
+        const char *cid = yyjson_get_str(v_cid);
+        if (!proj || !proj[0] || !cid || !cid[0]) {
+            yyjson_doc_free(doc);
+            cbm_http_replyf(c, 400, g_cors_json, "{\"error\":\"missing project or card_id\"}");
+            return;
+        }
+        snprintf(project, sizeof(project), "%s", proj);
+        snprintf(card_id, sizeof(card_id), "%s", cid);
+        archived = yyjson_get_bool(v_arch);
+    }
+    yyjson_doc_free(doc);
+
+    if (!resolve_project_root_path(project, root_path, sizeof(root_path))) {
+        cbm_http_replyf(c, 404, g_cors_json, "{\"error\":\"project not found\"}");
+        return;
+    }
+
+    board = calloc(1, sizeof(*board));
+    if (!board) {
+        cbm_http_replyf(c, 500, g_cors_json, "{\"error\":\"out of memory\"}");
+        return;
+    }
+    cbm_game_board_read(root_path, board);
+    entry = game_board_find(board, card_id);
+    if (!entry) {
+        free(board);
+        cbm_http_replyf(c, 404, g_cors_json, "{\"error\":\"card not found\"}");
+        return;
+    }
+    if (strcmp(entry->work_state, "done") != 0) {
+        free(board);
+        cbm_http_replyf(c, 409, g_cors_json, "{\"error\":\"card not done\"}");
+        return;
+    }
+    free(board);
+
+    if (srv->mutation_begin && !srv->mutation_begin(srv->mutation_context, project)) {
+        cbm_http_replyf(c, 423, g_cors_json,
+                        "{\"error\":\"project is busy; retry after indexing\"}");
+        return;
+    }
+    mutation_held = srv->mutation_begin != NULL;
+
+    db_path_for_project(project, db_path, sizeof(db_path));
+    store = db_path[0] ? cbm_store_open_path(db_path) : NULL;
+    if (!store) {
+        if (mutation_held) {
+            srv->mutation_end(srv->mutation_context, project);
+        }
+        cbm_http_replyf(c, 500, g_cors_json, "{\"error\":\"cannot open store\"}");
+        return;
+    }
+
+    rc = cbm_store_game_archive_set(store, card_id, archived ? 1 : 0);
+    cbm_store_close(store);
+    if (mutation_held) {
+        srv->mutation_end(srv->mutation_context, project);
+    }
+
+    if (rc != CBM_STORE_OK) {
+        cbm_http_replyf(c, 500, g_cors_json, "{\"error\":\"save failed\"}");
+        return;
+    }
+
+    cbm_json_escape(esc_proj, (int)sizeof(esc_proj), project);
+    cbm_json_escape(esc_id, (int)sizeof(esc_id), card_id);
+    cbm_http_replyf(c, 200, g_cors_json, "{\"project\":\"%s\",\"card_id\":\"%s\",\"archived\":%s}",
+                    esc_proj, esc_id, archived ? "true" : "false");
+}
+
+#define SPEC_BOARD_POST_MAX 4096
+
+/**
+ * @sdd-task: Task #2 - HTTP GET additive + POST epic-id 404
+ * @sdd-spec: specs/spec-008-g8r-grill-epic-todo/spec.md
+ * @sdd-decision: SDD-ADR-035 POST stays spec-only; same 404 string as unknown spec
+ * @sdd-why: epic id is not a spec; do not invent "epic not found"; no store write
+ * @human-debug: POST epic id 200 → find walked epics[] or matched a spec with that id
+ *
+ * Lookup is specs[] only. An epic path that is not in specs[] returns NULL.
+ */
+static const cbm_spec_board_entry_t *spec_board_find(const cbm_spec_board_t *board,
+                                                     const char *spec_id) {
+    int i;
+    if (!board || !spec_id || !spec_id[0]) {
+        return NULL;
+    }
+    for (i = 0; i < board->spec_count; i++) {
+        if (strcmp(board->specs[i].id, spec_id) == 0) {
+            return &board->specs[i];
+        }
+    }
+    return NULL;
+}
+
+/**
+ * @sdd-task: Task #2 - HTTP GET additive + POST epic-id 404
+ * @sdd-spec: specs/spec-008-g8r-grill-epic-todo/spec.md
+ * @sdd-decision: SDD-ADR-035 POST stays spec-only; SDD-ADR-036 no grill fopen here
+ * @sdd-why: epic id 404 spec not found before set; skill trees unchanged
+ * @human-debug: POST epic 200 → find walked epics[] or set ran before 404
+ *
+ * POST /api/spec-board {project, spec_id, archived} → flag object (not the board).
+ * Epic ids not in specs[] → 404 {"error":"spec not found"} before any store write.
+ */
+static void handle_spec_board_post(cbm_http_server_t *srv, cbm_http_conn_t *c,
+                                   const cbm_http_req_t *req) {
+    yyjson_doc *doc;
+    yyjson_val *root;
+    yyjson_val *v_proj;
+    yyjson_val *v_sid;
+    yyjson_val *v_arch;
+    char project[256] = {0};
+    char spec_id[192] = {0};
+    char root_path[1024];
+    char db_path[1024];
+    char esc_proj[512];
+    char esc_id[384];
+    cbm_spec_board_t *board;
+    const cbm_spec_board_entry_t *entry;
+    cbm_store_t *store;
+    bool archived;
+    bool mutation_held;
+    int rc;
+
+    if (!req->body || req->body_len == 0 || req->body_len > SPEC_BOARD_POST_MAX) {
+        cbm_http_replyf(c, 400, g_cors_json, "{\"error\":\"invalid body\"}");
+        return;
+    }
+
+    doc = yyjson_read(req->body, req->body_len, 0);
+    if (!doc) {
+        cbm_http_replyf(c, 400, g_cors_json, "{\"error\":\"invalid json\"}");
+        return;
+    }
+
+    root = yyjson_doc_get_root(doc);
+    v_proj = yyjson_obj_get(root, "project");
+    v_sid = yyjson_obj_get(root, "spec_id");
+    v_arch = yyjson_obj_get(root, "archived");
+    if (!v_arch || !yyjson_is_bool(v_arch)) {
+        yyjson_doc_free(doc);
+        cbm_http_replyf(c, 400, g_cors_json, "{\"error\":\"invalid archived\"}");
+        return;
+    }
+    if (!v_proj || !yyjson_is_str(v_proj) || !v_sid || !yyjson_is_str(v_sid)) {
+        yyjson_doc_free(doc);
+        cbm_http_replyf(c, 400, g_cors_json, "{\"error\":\"missing project or spec_id\"}");
+        return;
+    }
+
+    {
+        const char *proj = yyjson_get_str(v_proj);
+        const char *sid = yyjson_get_str(v_sid);
+        if (!proj || !proj[0] || !sid || !sid[0]) {
+            yyjson_doc_free(doc);
+            cbm_http_replyf(c, 400, g_cors_json, "{\"error\":\"missing project or spec_id\"}");
+            return;
+        }
+        snprintf(project, sizeof(project), "%s", proj);
+        snprintf(spec_id, sizeof(spec_id), "%s", sid);
+        archived = yyjson_get_bool(v_arch);
+    }
+    yyjson_doc_free(doc);
+
+    if (!resolve_project_root_path(project, root_path, sizeof(root_path))) {
+        cbm_http_replyf(c, 404, g_cors_json, "{\"error\":\"project not found\"}");
+        return;
+    }
+
+    board = calloc(1, sizeof(*board));
+    if (!board) {
+        cbm_http_replyf(c, 500, g_cors_json, "{\"error\":\"out of memory\"}");
+        return;
+    }
+    cbm_spec_board_read(root_path, board);
+    entry = spec_board_find(board, spec_id);
+    if (!entry) {
+        free(board);
+        cbm_http_replyf(c, 404, g_cors_json, "{\"error\":\"spec not found\"}");
+        return;
+    }
+    if (strcmp(entry->column, "done") != 0) {
+        free(board);
+        cbm_http_replyf(c, 409, g_cors_json, "{\"error\":\"spec not done\"}");
+        return;
+    }
+    free(board);
+
+    if (srv->mutation_begin && !srv->mutation_begin(srv->mutation_context, project)) {
+        cbm_http_replyf(c, 423, g_cors_json,
+                        "{\"error\":\"project is busy; retry after indexing\"}");
+        return;
+    }
+    mutation_held = srv->mutation_begin != NULL;
+
+    db_path_for_project(project, db_path, sizeof(db_path));
+    store = db_path[0] ? cbm_store_open_path(db_path) : NULL;
+    if (!store) {
+        if (mutation_held) {
+            srv->mutation_end(srv->mutation_context, project);
+        }
+        cbm_http_replyf(c, 500, g_cors_json, "{\"error\":\"cannot open store\"}");
+        return;
+    }
+
+    rc = cbm_store_spec_archive_set(store, spec_id, archived ? 1 : 0);
+    cbm_store_close(store);
+    if (mutation_held) {
+        srv->mutation_end(srv->mutation_context, project);
+    }
+
+    if (rc != CBM_STORE_OK) {
+        cbm_http_replyf(c, 500, g_cors_json, "{\"error\":\"save failed\"}");
+        return;
+    }
+
+    cbm_json_escape(esc_proj, (int)sizeof(esc_proj), project);
+    cbm_json_escape(esc_id, (int)sizeof(esc_id), spec_id);
+    cbm_http_replyf(c, 200, g_cors_json, "{\"project\":\"%s\",\"spec_id\":\"%s\",\"archived\":%s}",
+                    esc_proj, esc_id, archived ? "true" : "false");
 }
 
 /* GET /api/skill-presence?project=X → { "sdd_skill": bool, "gamedev_skill": bool }
@@ -905,9 +1396,15 @@ static void handle_adr_get(cbm_http_conn_t *c, const cbm_http_req_t *req) {
     cbm_store_close(store);
 }
 
-/* POST /api/adr — save ADR content. Body: {"project":"...","content":"..."} */
+/**
+ * @sdd-task: Task #3 - HTTP + MCP + watcher Gherkin
+ * @sdd-spec: specs/spec-004-j8k-adr-parse-on-reindex/spec.md
+ * @sdd-decision: SDD-ADR-020 POST /api/adr body max 32768
+ * @sdd-why: Generated extract + Phase-1 manual must still save; 16384 rejected real trio+notes
+ * @human-debug: 400 invalid body with a ~16KiB textarea means this cap was not rebuilt
+ */
 static void handle_adr_save(cbm_http_server_t *srv, cbm_http_conn_t *c, const cbm_http_req_t *req) {
-    if (req->body_len == 0 || req->body_len > 16384) {
+    if (req->body_len == 0 || req->body_len > CBM_SZ_32K) {
         cbm_http_replyf(c, 400, g_cors_json, "{\"error\":\"invalid body\"}");
         return;
     }
@@ -1103,7 +1600,62 @@ static void *index_thread_fn(void *arg) {
     return NULL;
 }
 
-/* POST /api/index — body: {"root_path": "/abs/path", "project_name": "..."} */
+static void reply_identity_conflict(cbm_http_conn_t *c, const cbm_identity_admit_result_t *adm) {
+    const char *code =
+        adm->verdict == CBM_IDENTITY_ADMIT_NAME_EXISTS ? "name_exists" : "path_exists";
+    const char *msg = adm->verdict == CBM_IDENTITY_ADMIT_NAME_EXISTS
+                          ? "project name already owns a different Path"
+                          : "Path already indexed";
+    char esc_err[512];
+    char esc_name[512];
+    char esc_at[128];
+    cbm_json_escape(esc_err, (int)sizeof(esc_err), msg);
+    cbm_json_escape(esc_name, (int)sizeof(esc_name), adm->existing_project);
+    cbm_json_escape(esc_at, (int)sizeof(esc_at), adm->indexed_at);
+    cbm_http_replyf(c, 409, g_cors_json,
+                    "{\"error\":\"%s\",\"code\":\"%s\",\"existing_project\":\"%s\","
+                    "\"indexed_at\":\"%s\"}",
+                    esc_err, code, esc_name, esc_at);
+}
+
+static int collect_index_inflight(cbm_http_server_t *server, cbm_identity_inflight_t *out,
+                                  int cap) {
+    int n = 0;
+    int i;
+    for (i = 0; i < MAX_INDEX_JOBS && n < cap; i++) {
+        if (atomic_load(&server->index_jobs[i].status) != 1) {
+            continue;
+        }
+        cbm_identity_canonical_root(server->index_jobs[i].root_path, out[n].canonical_root,
+                                    sizeof(out[n].canonical_root));
+        snprintf(out[n].project, sizeof(out[n].project), "%s", server->index_jobs[i].project_name);
+        n++;
+    }
+    return n;
+}
+
+static int find_running_index_slot(cbm_http_server_t *server, const char *canonical,
+                                   const char *project) {
+    int i;
+    char job_canon[CBM_SZ_4K];
+    for (i = 0; i < MAX_INDEX_JOBS; i++) {
+        if (atomic_load(&server->index_jobs[i].status) != 1) {
+            continue;
+        }
+        cbm_identity_canonical_root(server->index_jobs[i].root_path, job_canon, sizeof(job_canon));
+        if (strcmp(job_canon, canonical) != 0) {
+            continue;
+        }
+        if (project && project[0] && strcmp(server->index_jobs[i].project_name, project) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* POST /api/index — create: {"root_path":"..."}  reindex: + "project" (or project_name)
+ * @sdd-task: Task #2 admit. Slot allocated only after cbm_identity_admit allows.
+ * @human-debug: 409 path_exists/name_exists; in-flight same Path+project → 202 subscribe. */
 static void handle_index_start(cbm_http_server_t *server, cbm_http_conn_t *c,
                                const cbm_http_req_t *req) {
     if (!server || !server->index_executor) {
@@ -1129,8 +1681,12 @@ static void handle_index_start(cbm_http_server_t *server, cbm_http_conn_t *c,
         return;
     }
     const char *rpath = yyjson_get_str(v_path);
+    yyjson_val *v_project = yyjson_obj_get(root, "project");
     yyjson_val *v_project_name = yyjson_obj_get(root, "project_name");
-    const char *project_name = yyjson_is_str(v_project_name) ? yyjson_get_str(v_project_name) : "";
+    const char *project = yyjson_is_str(v_project) ? yyjson_get_str(v_project) : "";
+    const char *project_name_alias =
+        yyjson_is_str(v_project_name) ? yyjson_get_str(v_project_name) : "";
+    const char *reindex_key = (project && project[0]) ? project : project_name_alias;
 
     /* Check path exists */
     if (!cbm_is_dir(rpath)) {
@@ -1161,7 +1717,33 @@ static void handle_index_start(cbm_http_server_t *server, cbm_http_conn_t *c,
         return;
     }
 
-    /* Find free job slot */
+    char *derived = cbm_project_name_from_path(canonical_root);
+    cbm_identity_inflight_t inflight[MAX_INDEX_JOBS];
+    cbm_identity_admit_result_t adm;
+    int inflight_n = collect_index_inflight(server, inflight, MAX_INDEX_JOBS);
+    const char *cache_dir = cbm_resolve_cache_dir();
+    cbm_identity_intent_t intent =
+        (reindex_key && reindex_key[0]) ? CBM_IDENTITY_INTENT_REINDEX : CBM_IDENTITY_INTENT_CREATE;
+    cbm_identity_admit(cache_dir, rpath, derived, reindex_key, intent, inflight, inflight_n, &adm);
+    free(derived);
+    if (adm.verdict == CBM_IDENTITY_ADMIT_PATH_EXISTS ||
+        adm.verdict == CBM_IDENTITY_ADMIT_NAME_EXISTS) {
+        yyjson_doc_free(doc);
+        reply_identity_conflict(c, &adm);
+        return;
+    }
+    if (adm.verdict == CBM_IDENTITY_ADMIT_REINDEX) {
+        int existing = find_running_index_slot(server, adm.canonical_root, adm.bind_project);
+        if (existing >= 0) {
+            yyjson_doc_free(doc);
+            cbm_http_replyf(c, 202, g_cors_json,
+                            "{\"status\":\"indexing\",\"slot\":%d,\"path\":\"%s\"}", existing,
+                            server->index_jobs[existing].root_path);
+            return;
+        }
+    }
+
+    /* Find free job slot — only after admit allows a new physical job */
     int slot = -1;
     for (int i = 0; i < MAX_INDEX_JOBS; i++) {
         int st = atomic_load(&server->index_jobs[i].status);
@@ -1189,7 +1771,7 @@ static void handle_index_start(cbm_http_server_t *server, cbm_http_conn_t *c,
     }
     job->server = server;
     snprintf(job->root_path, sizeof(job->root_path), "%s", rpath);
-    snprintf(job->project_name, sizeof(job->project_name), "%s", project_name);
+    snprintf(job->project_name, sizeof(job->project_name), "%s", adm.bind_project);
     job->error_msg[0] = '\0';
     atomic_store(&job->status, 1);
     atomic_store_explicit(&job->completed, 0, memory_order_release);
@@ -1939,10 +2521,31 @@ static void dispatch_request(cbm_http_server_t *srv, cbm_http_conn_t *c,
         return;
     }
 
-    /* GET /api/spec-board → sdd-skill Kanban board (Todo/In Progress/Done) */
-    if (is_get && cbm_http_path_match(req->path, "/api/spec-board*")) {
-        handle_spec_board(c, req);
-        return;
+    /* GET+POST /api/spec-board → board read (merge flags) / archive mutate */
+    if (cbm_http_path_match(req->path, "/api/spec-board*")) {
+        if (is_get) {
+            handle_spec_board_get(c, req);
+            return;
+        }
+        if (is_post) {
+            handle_spec_board_post(srv, c, req);
+            return;
+        }
+        /* Other methods fall through (no 405). */
+    }
+
+    /* GET+POST /api/game-board → board read (merge flags) / archive mutate.
+     * @sdd-task: Task #3 / spec-012 / SDD-ADR-053 — GET vs POST like spec-board; no 405. */
+    if (cbm_http_path_match(req->path, "/api/game-board*")) {
+        if (is_get) {
+            handle_game_board_get(c, req);
+            return;
+        }
+        if (is_post) {
+            handle_game_board_post(srv, c, req);
+            return;
+        }
+        /* Other methods fall through (no 405). */
     }
 
     /* GET /api/skill-presence → which skill-specific tabs this project has */

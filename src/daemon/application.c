@@ -11,6 +11,7 @@
 #include "foundation/log.h"
 #include "foundation/mem.h"
 #include "foundation/platform.h"
+#include "foundation/identity.h"
 #include "foundation/secure_random.h"
 #include "foundation/sha256.h"
 #include "foundation/subprocess.h"
@@ -92,6 +93,7 @@ typedef enum {
     APPLICATION_JOB_SUBSCRIBE_CANCELLING,
     APPLICATION_JOB_SUBSCRIBE_UNAVAILABLE,
     APPLICATION_JOB_SUBSCRIBE_ALLOCATION_FAILED,
+    APPLICATION_JOB_SUBSCRIBE_PATH_CONFLICT,
 } application_job_subscribe_status_t;
 
 struct cbm_daemon_application_watch {
@@ -1516,6 +1518,26 @@ static cbm_daemon_application_job_t *application_find_active_job_locked(
     return NULL;
 }
 
+static cbm_daemon_application_job_t *application_find_active_job_by_path_locked(
+    cbm_daemon_application_t *application, const char *root_path) {
+    char want[CBM_SZ_4K];
+    char have[CBM_SZ_4K];
+    cbm_identity_canonical_root(root_path, want, sizeof(want));
+    if (!want[0]) {
+        return NULL;
+    }
+    for (cbm_daemon_application_job_t *job = application->jobs; job; job = job->next) {
+        if (job->terminal) {
+            continue;
+        }
+        cbm_identity_canonical_root(job->root_path, have, sizeof(have));
+        if (strcmp(have, want) == 0) {
+            return job;
+        }
+    }
+    return NULL;
+}
+
 static char *application_index_project_key(const char *root_path, const char *args_json) {
     char *override = cbm_mcp_get_string_arg(args_json, "name");
     char *key = cbm_project_name_from_path(override && override[0] ? override : root_path);
@@ -1554,6 +1576,11 @@ static bool application_index_args_normalize_defaults(yyjson_mut_val *root) {
     if (name && (!yyjson_mut_is_str(name) || yyjson_mut_get_len(name) == 0)) {
         (void)yyjson_mut_obj_remove_key(root, "name");
     }
+    /* @sdd-task: Task #2 - adr_fill is intent, not identity. Watcher jobs set
+     * false; strip so a watcher poll can still subscribe to an in-flight user
+     * job (SDD-ADR-019). @human-debug: subscribe OPTIONS_CONFLICT on watcher
+     * vs user → this strip missing. */
+    (void)yyjson_mut_obj_remove_key(root, "adr_fill");
     return true;
 }
 
@@ -1588,6 +1615,16 @@ static cbm_daemon_application_job_t *application_job_subscribe_locked(
     }
     cbm_daemon_application_job_t *job =
         application_find_active_job_locked(application, project_key);
+    if (!job) {
+        cbm_daemon_application_job_t *by_path =
+            application_find_active_job_by_path_locked(application, root_path);
+        /* @sdd-task: Task #2 — same Path, different project_key is not a subscribe. */
+        if (by_path && strcmp(by_path->project_key, project_key) != 0) {
+            *status_out = APPLICATION_JOB_SUBSCRIBE_PATH_CONFLICT;
+            return NULL;
+        }
+        job = by_path;
+    }
     if (job) {
         if (job->cancel_requested) {
             *status_out = APPLICATION_JOB_SUBSCRIBE_CANCELLING;
@@ -1979,6 +2016,7 @@ static void application_background_initialize_impl(cbm_daemon_application_sessio
                 subscribe_status == APPLICATION_JOB_SUBSCRIBE_BUSY ||
                 subscribe_status == APPLICATION_JOB_SUBSCRIBE_CANCELLING ||
                 subscribe_status == APPLICATION_JOB_SUBSCRIBE_OPTIONS_CONFLICT ||
+                subscribe_status == APPLICATION_JOB_SUBSCRIBE_PATH_CONFLICT ||
                 subscribe_status == APPLICATION_JOB_SUBSCRIBE_UNAVAILABLE ||
                 subscribe_status == APPLICATION_JOB_SUBSCRIBE_ALLOCATION_FAILED;
             cbm_log_warn("daemon.autoindex.admission_failed", "project", project, "action",
@@ -2213,6 +2251,8 @@ static char *application_index_execute(void *context, const char *root_path,
         const char *message = "daemon index coordinator is stopping or unavailable";
         if (subscribe_status == APPLICATION_JOB_SUBSCRIBE_OPTIONS_CONFLICT) {
             message = "another index operation for this project is active with different options";
+        } else if (subscribe_status == APPLICATION_JOB_SUBSCRIBE_PATH_CONFLICT) {
+            message = "path_exists: an index job is already running for this Path";
         } else if (subscribe_status == APPLICATION_JOB_SUBSCRIBE_ALLOCATION_FAILED) {
             message = "daemon index coordinator could not allocate an index job";
         }
@@ -3332,6 +3372,37 @@ cbm_daemon_runtime_application_status_t cbm_daemon_application_client_hook_augme
                                            timeout_ms);
 }
 
+static char *application_build_index_args(const char *canonical_root, const char *project_name,
+                                          bool watcher_no_fill) {
+    yyjson_mut_doc *document = yyjson_mut_doc_new(NULL);
+    yyjson_mut_val *root = document ? yyjson_mut_obj(document) : NULL;
+    bool encoded;
+    char *default_project;
+    bool custom_project;
+    char *args;
+
+    if (!document || !root || !canonical_root || !project_name) {
+        yyjson_mut_doc_free(document);
+        return NULL;
+    }
+    yyjson_mut_doc_set_root(document, root);
+    encoded = yyjson_mut_obj_add_strcpy(document, root, "repo_path", canonical_root);
+    default_project = cbm_project_name_from_path(canonical_root);
+    custom_project =
+        project_name[0] && (!default_project || strcmp(default_project, project_name) != 0);
+    if (encoded && custom_project) {
+        encoded = yyjson_mut_obj_add_strcpy(document, root, "name", project_name);
+    }
+    free(default_project);
+    /* @sdd-task: Task #2 - Watcher / auto_watch: never splice ADR (US-003). */
+    if (encoded && watcher_no_fill) {
+        encoded = yyjson_mut_obj_add_bool(document, root, "adr_fill", false);
+    }
+    args = encoded ? yyjson_mut_write(document, 0, NULL) : NULL;
+    yyjson_mut_doc_free(document);
+    return args;
+}
+
 static int application_background_index(cbm_daemon_application_t *application,
                                         const char *project_name, const char *root_path,
                                         bool require_live_watch) {
@@ -3344,23 +3415,7 @@ static int application_background_index(cbm_daemon_application_t *application,
         stat(canonical_root, &root_status) != 0 || !S_ISDIR(root_status.st_mode)) {
         return -1;
     }
-    yyjson_mut_doc *document = yyjson_mut_doc_new(NULL);
-    yyjson_mut_val *root = document ? yyjson_mut_obj(document) : NULL;
-    if (!document || !root) {
-        yyjson_mut_doc_free(document);
-        return -1;
-    }
-    yyjson_mut_doc_set_root(document, root);
-    bool encoded = yyjson_mut_obj_add_strcpy(document, root, "repo_path", canonical_root);
-    char *default_project = cbm_project_name_from_path(canonical_root);
-    bool custom_project =
-        project_name[0] && (!default_project || strcmp(default_project, project_name) != 0);
-    if (encoded && custom_project) {
-        encoded = yyjson_mut_obj_add_strcpy(document, root, "name", project_name);
-    }
-    free(default_project);
-    char *args = encoded ? yyjson_mut_write(document, 0, NULL) : NULL;
-    yyjson_mut_doc_free(document);
+    char *args = application_build_index_args(canonical_root, project_name, require_live_watch);
     if (!args) {
         return -1;
     }
@@ -3411,6 +3466,7 @@ static int application_background_index(cbm_daemon_application_t *application,
             return 1;
         }
         return subscribe_status == APPLICATION_JOB_SUBSCRIBE_OPTIONS_CONFLICT ||
+                       subscribe_status == APPLICATION_JOB_SUBSCRIBE_PATH_CONFLICT ||
                        subscribe_status == APPLICATION_JOB_SUBSCRIBE_BUSY ||
                        subscribe_status == APPLICATION_JOB_SUBSCRIBE_CANCELLING
                    ? 1
@@ -3503,4 +3559,23 @@ bool cbm_daemon_application_session_retains_store_for_test(
     const cbm_daemon_application_session_t *session =
         (const cbm_daemon_application_session_t *)opaque_session;
     return session && session->mcp && cbm_mcp_server_store(session->mcp) != NULL;
+}
+
+bool cbm_daemon_application_index_args_equal_for_test(const char *left, const char *right) {
+    return application_index_args_equal(left, right);
+}
+
+char *cbm_daemon_application_watcher_index_args_for_test(const char *root_path,
+                                                         const char *project_name) {
+    char canonical_root[APPLICATION_PATH_CAP];
+    struct stat root_status;
+
+    if (!root_path || !project_name) {
+        return NULL;
+    }
+    if (!cbm_canonical_path(root_path, canonical_root, sizeof(canonical_root)) ||
+        stat(canonical_root, &root_status) != 0 || !S_ISDIR(root_status.st_mode)) {
+        return NULL;
+    }
+    return application_build_index_args(canonical_root, project_name, true);
 }

@@ -13,6 +13,7 @@
 #include "../src/mcp/compact_out.h"
 #include "test_framework.h"
 #include "test_helpers.h"
+#include <adr/adr_fill.h>
 #include <cli/cli.h>
 #include <mcp/index_supervisor.h> /* spawn-count hook — #845 in-process guard */
 #include <mcp/mcp.h>
@@ -1203,6 +1204,22 @@ TEST(mcp_get_bool_arg) {
     ASSERT_FALSE(val);
     val = cbm_mcp_get_bool_arg(args, "missing");
     ASSERT_FALSE(val);
+    PASS();
+}
+
+/*
+ * @sdd-task: Task #2 - Pipeline hook + `.sdd-skill` skip
+ * @sdd-spec: specs/spec-004-j8k-adr-parse-on-reindex/spec.md
+ * @sdd-decision: SDD-ADR-019 default true; explicit false
+ * @sdd-why: Gate unit without a full index job
+ * @human-debug: NULL/{} false → mcp.c:1546-1547 must return true
+ */
+TEST(mcp_index_want_adr_fill_defaults_true) {
+    ASSERT_TRUE(cbm_mcp_index_want_adr_fill(NULL));
+    ASSERT_TRUE(cbm_mcp_index_want_adr_fill("{}"));
+    ASSERT_TRUE(cbm_mcp_index_want_adr_fill("{\"repo_path\":\"/tmp/x\"}"));
+    ASSERT_TRUE(cbm_mcp_index_want_adr_fill("{\"adr_fill\":true}"));
+    ASSERT_FALSE(cbm_mcp_index_want_adr_fill("{\"adr_fill\":false}"));
     PASS();
 }
 
@@ -6183,6 +6200,447 @@ TEST(tool_index_repository_reports_store_backed_adr) {
     PASS();
 }
 
+/**
+ * @sdd-task: Task #3 - HTTP + MCP + watcher Gherkin
+ * @sdd-spec: specs/spec-004-j8k-adr-parse-on-reindex/spec.md
+ * @sdd-decision: SDD-ADR-019 fill on index_repository; SDD-ADR-021 whole-doc survive
+ * @sdd-why: manage_adr get is the same blob GET /api/adr reads after user-triggered index
+ * @human-debug: Missing PURPOSE-* after indexed → adr_fill not set or trio path wrong
+ */
+static int mcp_write_index_tree(const char *root, const char *purpose, const char *stack,
+                                const char *decisions) {
+    char src[512];
+
+    snprintf(src, sizeof(src), "%s/main.py", root);
+    if (th_write_file(src, "def main():\n    return 1\n") != 0)
+        return -1;
+    if (purpose && th_write_file(TH_PATH(root, ".sdd-skill/context_ai.md"), purpose) != 0)
+        return -1;
+    if (stack && th_write_file(TH_PATH(root, ".sdd-skill/baseline/TECH_STACK.md"), stack) != 0)
+        return -1;
+    if (decisions &&
+        th_write_file(TH_PATH(root, ".sdd-skill/baseline/ARCHITECTURE_ADR.md"), decisions) != 0)
+        return -1;
+    return 0;
+}
+
+static int mcp_seed_project_adr(const char *cache, const char *name, const char *root,
+                                const char *adr) {
+    char path[CBM_SZ_2K];
+    cbm_store_t *st;
+    int rc;
+
+    snprintf(path, sizeof(path), "%s/%s.db", cache, name);
+    st = cbm_store_open_path(path);
+    if (!st)
+        return -1;
+    rc = cbm_store_upsert_project(st, name, root);
+    if (rc == CBM_STORE_OK && adr)
+        rc = cbm_store_adr_store(st, name, adr);
+    cbm_store_close(st);
+    return rc;
+}
+
+static char *mcp_adr_load(const char *cache, const char *project) {
+    char path[CBM_SZ_2K];
+    cbm_store_t *st;
+    cbm_adr_t adr;
+    char *out = NULL;
+
+    snprintf(path, sizeof(path), "%s/%s.db", cache, project);
+    st = cbm_store_open_path_query(path);
+    if (!st)
+        return NULL;
+    memset(&adr, 0, sizeof(adr));
+    if (cbm_store_adr_get(st, project, &adr) == CBM_STORE_OK && adr.content)
+        out = strdup(adr.content);
+    if (adr.content)
+        cbm_store_adr_free(&adr);
+    cbm_store_close(st);
+    return out;
+}
+
+static char *mcp_between(const char *doc, const char *start_m, const char *end_m) {
+    const char *s;
+    const char *e;
+    size_t n;
+    char *out;
+
+    if (!doc)
+        return NULL;
+    s = strstr(doc, start_m);
+    if (!s)
+        return NULL;
+    s += strlen(start_m);
+    e = strstr(s, end_m);
+    if (!e)
+        return NULL;
+    n = (size_t)(e - s);
+    out = malloc(n + 1);
+    if (!out)
+        return NULL;
+    memcpy(out, s, n);
+    out[n] = '\0';
+    return out;
+}
+
+TEST(tool_index_repository_fills_adr_same_as_store_get) {
+    char tmp_dir[256];
+    char cache[256];
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    cbm_mcp_server_t *srv;
+    char args[1024];
+    char get_args[256];
+    char *resp;
+    char *stored;
+
+    snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/cbm-mcp-adr-fill-XXXXXX");
+    ASSERT(cbm_mkdtemp(tmp_dir) != NULL);
+    snprintf(cache, sizeof(cache), "/tmp/cbm-mcp-adr-fillc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_EQ(mcp_write_index_tree(tmp_dir, "PURPOSE-MCP-FILL\n", NULL, NULL), 0);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+
+    srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+    snprintf(args, sizeof(args),
+             "{\"repo_path\":\"%s\",\"name\":\"alpha\",\"mode\":\"fast\"}", tmp_dir);
+    resp = cbm_mcp_handle_tool(srv, "index_repository", args);
+    ASSERT_NOT_NULL(resp);
+    ASSERT(response_contains_json_fragment(resp, "\"status\":\"indexed\""));
+    free(resp);
+
+    snprintf(get_args, sizeof(get_args), "{\"project\":\"alpha\",\"mode\":\"get\"}");
+    resp = cbm_mcp_handle_tool(srv, "manage_adr", get_args);
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, CBM_ADR_GENERATED_START));
+    ASSERT_NOT_NULL(strstr(resp, "PURPOSE-MCP-FILL"));
+    ASSERT_NULL(strstr(resp, "\"isError\":true"));
+    free(resp);
+
+    stored = mcp_adr_load(cache, "alpha");
+    ASSERT_NOT_NULL(stored);
+    ASSERT_NOT_NULL(strstr(stored, CBM_ADR_GENERATED_START));
+    ASSERT_NOT_NULL(strstr(stored, "PURPOSE-MCP-FILL"));
+    free(stored);
+
+    cbm_mcp_server_free(srv);
+    cleanup_project_db(cache, "alpha");
+    restore_cache_dir(saved_copy);
+    free(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(tmp_dir);
+    PASS();
+}
+
+TEST(tool_manage_adr_manual_survives_next_index) {
+    static const char *old_doc =
+        "<!-- CBM-GENERATED-START -->\n# Purpose\nOLD-GEN\n"
+        "<!-- CBM-GENERATED-END -->\n<!-- CBM-MANUAL-START -->\n# Old notes\n"
+        "<!-- CBM-MANUAL-END -->\n";
+    char tmp_dir[256];
+    char cache[256];
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    cbm_mcp_server_t *srv;
+    char args[1024];
+    char update_args[2048];
+    char get_args[256];
+    char *resp;
+    char *stored;
+    char *manual;
+
+    snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/cbm-mcp-adr-surv-XXXXXX");
+    ASSERT(cbm_mkdtemp(tmp_dir) != NULL);
+    snprintf(cache, sizeof(cache), "/tmp/cbm-mcp-adr-survc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_EQ(mcp_write_index_tree(tmp_dir, "PURPOSE-SURVIVE\n", "STACK-SURVIVE\n",
+                                   "DECISION-SURVIVE\n"),
+              0);
+    ASSERT_EQ(mcp_seed_project_adr(cache, "alpha", tmp_dir, old_doc), CBM_STORE_OK);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+
+    srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+    snprintf(update_args, sizeof(update_args),
+             "{\"project\":\"alpha\",\"mode\":\"update\",\"content\":\"%s\"}",
+             "<!-- CBM-GENERATED-START -->\\n# Purpose\\nOLD-GEN\\n"
+             "<!-- CBM-GENERATED-END -->\\n<!-- CBM-MANUAL-START -->\\n# New notes\\n"
+             "<!-- CBM-MANUAL-END -->\\n");
+    resp = cbm_mcp_handle_tool(srv, "manage_adr", update_args);
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, "updated"));
+    free(resp);
+
+    snprintf(args, sizeof(args),
+             "{\"repo_path\":\"%s\",\"name\":\"alpha\",\"mode\":\"fast\"}", tmp_dir);
+    resp = cbm_mcp_handle_tool(srv, "index_repository", args);
+    ASSERT_NOT_NULL(resp);
+    ASSERT(response_contains_json_fragment(resp, "\"status\":\"indexed\""));
+    free(resp);
+
+    snprintf(get_args, sizeof(get_args), "{\"project\":\"alpha\",\"mode\":\"get\"}");
+    resp = cbm_mcp_handle_tool(srv, "manage_adr", get_args);
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, "# New notes"));
+    ASSERT_NULL(strstr(resp, "# Old notes"));
+    ASSERT_NOT_NULL(strstr(resp, "PURPOSE-SURVIVE"));
+    free(resp);
+
+    stored = mcp_adr_load(cache, "alpha");
+    ASSERT_NOT_NULL(stored);
+    manual = mcp_between(stored, CBM_ADR_MANUAL_START, CBM_ADR_MANUAL_END);
+    ASSERT_NOT_NULL(manual);
+    ASSERT_NOT_NULL(strstr(manual, "# New notes"));
+    ASSERT_NULL(strstr(manual, "# Old notes"));
+    free(manual);
+    free(stored);
+
+    cbm_mcp_server_free(srv);
+    cleanup_project_db(cache, "alpha");
+    restore_cache_dir(saved_copy);
+    free(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(tmp_dir);
+    PASS();
+}
+
+TEST(tool_index_repository_adr_fill_false_leaves_unmarked) {
+    char tmp_dir[256];
+    char cache[256];
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    cbm_mcp_server_t *srv;
+    char args[1024];
+    char *resp;
+    char *stored;
+
+    snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/cbm-mcp-adr-watch-XXXXXX");
+    ASSERT(cbm_mkdtemp(tmp_dir) != NULL);
+    snprintf(cache, sizeof(cache), "/tmp/cbm-mcp-adr-watchc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_EQ(mcp_write_index_tree(tmp_dir, "PURPOSE-WATCHER-SHOULD-NOT-FILL\n", NULL, NULL), 0);
+    ASSERT_EQ(mcp_seed_project_adr(cache, "alpha", tmp_dir, "# Before watch\n"), CBM_STORE_OK);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+
+    srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+    snprintf(args, sizeof(args),
+             "{\"repo_path\":\"%s\",\"name\":\"alpha\",\"mode\":\"fast\",\"adr_fill\":false}",
+             tmp_dir);
+    resp = cbm_mcp_handle_tool(srv, "index_repository", args);
+    ASSERT_NOT_NULL(resp);
+    ASSERT(response_contains_json_fragment(resp, "\"status\":\"indexed\""));
+    free(resp);
+
+    stored = mcp_adr_load(cache, "alpha");
+    ASSERT_NOT_NULL(stored);
+    ASSERT_STR_EQ(stored, "# Before watch\n");
+    ASSERT_NULL(strstr(stored, "PURPOSE-WATCHER-SHOULD-NOT-FILL"));
+    ASSERT_NULL(strstr(stored, "CBM-GENERATED"));
+    free(stored);
+
+    cbm_mcp_server_free(srv);
+    cleanup_project_db(cache, "alpha");
+    restore_cache_dir(saved_copy);
+    free(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(tmp_dir);
+    PASS();
+}
+
+/**
+ * @sdd-task: Task #2 - HTTP + MCP + watcher Gherkin
+ * @sdd-spec: specs/spec-013-r9w-adr-fill-gamedev-trio/spec.md
+ * @sdd-decision: SDD-ADR-058 XOR; SDD-ADR-060 NULL=neither dir
+ * @sdd-why: index_repository + manage_adr on a gamedev tree share the same store blob
+ * @human-debug: PURPOSE-MCP-GAME missing after indexed → adr_fill off or trio path is sdd
+ */
+static int mcp_write_gamedev_tree(const char *root, const char *purpose, const char *stack,
+                                  const char *decisions) {
+    char src[512];
+
+    snprintf(src, sizeof(src), "%s/main.py", root);
+    if (th_write_file(src, "def main():\n    return 1\n") != 0)
+        return -1;
+    if (th_mkdir_p(TH_PATH(root, ".gamedev")) != 0)
+        return -1;
+    if (purpose && th_write_file(TH_PATH(root, ".gamedev/game_context.md"), purpose) != 0)
+        return -1;
+    if (stack && th_write_file(TH_PATH(root, ".gamedev/baseline/TECH_STACK.md"), stack) != 0)
+        return -1;
+    if (decisions &&
+        th_write_file(TH_PATH(root, ".gamedev/baseline/ARCHITECTURE_ADR.md"), decisions) != 0)
+        return -1;
+    return 0;
+}
+
+TEST(tool_index_repository_fills_gamedev_same_as_store_get) {
+    char tmp_dir[256];
+    char cache[256];
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    cbm_mcp_server_t *srv;
+    char args[1024];
+    char get_args[256];
+    char *resp;
+    char *stored;
+
+    snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/cbm-mcp-gd-fill-XXXXXX");
+    ASSERT(cbm_mkdtemp(tmp_dir) != NULL);
+    snprintf(cache, sizeof(cache), "/tmp/cbm-mcp-gd-fillc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_EQ(mcp_write_gamedev_tree(tmp_dir, "PURPOSE-MCP-GAME\n", NULL, NULL), 0);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+
+    srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+    snprintf(args, sizeof(args),
+             "{\"repo_path\":\"%s\",\"name\":\"bevy\",\"mode\":\"fast\"}", tmp_dir);
+    resp = cbm_mcp_handle_tool(srv, "index_repository", args);
+    ASSERT_NOT_NULL(resp);
+    ASSERT(response_contains_json_fragment(resp, "\"status\":\"indexed\""));
+    free(resp);
+
+    snprintf(get_args, sizeof(get_args), "{\"project\":\"bevy\",\"mode\":\"get\"}");
+    resp = cbm_mcp_handle_tool(srv, "manage_adr", get_args);
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, CBM_ADR_GENERATED_START));
+    ASSERT_NOT_NULL(strstr(resp, "PURPOSE-MCP-GAME"));
+    ASSERT_NULL(strstr(resp, "\"isError\":true"));
+    free(resp);
+
+    stored = mcp_adr_load(cache, "bevy");
+    ASSERT_NOT_NULL(stored);
+    ASSERT_NOT_NULL(strstr(stored, CBM_ADR_GENERATED_START));
+    ASSERT_NOT_NULL(strstr(stored, "PURPOSE-MCP-GAME"));
+    free(stored);
+
+    cbm_mcp_server_free(srv);
+    cleanup_project_db(cache, "bevy");
+    restore_cache_dir(saved_copy);
+    free(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(tmp_dir);
+    PASS();
+}
+
+TEST(tool_manage_adr_manual_survives_next_gamedev_index) {
+    static const char *old_doc =
+        "<!-- CBM-GENERATED-START -->\n# Purpose\nOLD-GEN\n"
+        "<!-- CBM-GENERATED-END -->\n<!-- CBM-MANUAL-START -->\n# Old notes\n"
+        "<!-- CBM-MANUAL-END -->\n";
+    char tmp_dir[256];
+    char cache[256];
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    cbm_mcp_server_t *srv;
+    char args[1024];
+    char update_args[2048];
+    char get_args[256];
+    char *resp;
+    char *stored;
+    char *manual;
+
+    snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/cbm-mcp-gd-surv-XXXXXX");
+    ASSERT(cbm_mkdtemp(tmp_dir) != NULL);
+    snprintf(cache, sizeof(cache), "/tmp/cbm-mcp-gd-survc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_EQ(mcp_write_gamedev_tree(tmp_dir, "PURPOSE-SURVIVE-GAME\n", NULL, NULL), 0);
+    ASSERT_EQ(mcp_seed_project_adr(cache, "bevy", tmp_dir, old_doc), CBM_STORE_OK);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+
+    srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+    snprintf(update_args, sizeof(update_args),
+             "{\"project\":\"bevy\",\"mode\":\"update\",\"content\":\"%s\"}",
+             "<!-- CBM-GENERATED-START -->\\n# Purpose\\nOLD-GEN\\n"
+             "<!-- CBM-GENERATED-END -->\\n<!-- CBM-MANUAL-START -->\\n# New notes\\n"
+             "<!-- CBM-MANUAL-END -->\\n");
+    resp = cbm_mcp_handle_tool(srv, "manage_adr", update_args);
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, "updated"));
+    free(resp);
+
+    snprintf(args, sizeof(args),
+             "{\"repo_path\":\"%s\",\"name\":\"bevy\",\"mode\":\"fast\"}", tmp_dir);
+    resp = cbm_mcp_handle_tool(srv, "index_repository", args);
+    ASSERT_NOT_NULL(resp);
+    ASSERT(response_contains_json_fragment(resp, "\"status\":\"indexed\""));
+    free(resp);
+
+    snprintf(get_args, sizeof(get_args), "{\"project\":\"bevy\",\"mode\":\"get\"}");
+    resp = cbm_mcp_handle_tool(srv, "manage_adr", get_args);
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, "# New notes"));
+    ASSERT_NULL(strstr(resp, "# Old notes"));
+    ASSERT_NOT_NULL(strstr(resp, "PURPOSE-SURVIVE-GAME"));
+    free(resp);
+
+    stored = mcp_adr_load(cache, "bevy");
+    ASSERT_NOT_NULL(stored);
+    manual = mcp_between(stored, CBM_ADR_MANUAL_START, CBM_ADR_MANUAL_END);
+    ASSERT_NOT_NULL(manual);
+    ASSERT_NOT_NULL(strstr(manual, "# New notes"));
+    ASSERT_NULL(strstr(manual, "# Old notes"));
+    free(manual);
+    free(stored);
+
+    cbm_mcp_server_free(srv);
+    cleanup_project_db(cache, "bevy");
+    restore_cache_dir(saved_copy);
+    free(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(tmp_dir);
+    PASS();
+}
+
+TEST(tool_index_repository_adr_fill_false_leaves_gamedev_unmarked) {
+    char tmp_dir[256];
+    char cache[256];
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    cbm_mcp_server_t *srv;
+    char args[1024];
+    char *resp;
+    char *stored;
+
+    snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/cbm-mcp-gd-watch-XXXXXX");
+    ASSERT(cbm_mkdtemp(tmp_dir) != NULL);
+    snprintf(cache, sizeof(cache), "/tmp/cbm-mcp-gd-watchc-XXXXXX");
+    ASSERT(cbm_mkdtemp(cache) != NULL);
+    ASSERT_EQ(mcp_write_gamedev_tree(tmp_dir, "PURPOSE-WATCHER-SHOULD-NOT-FILL\n", NULL, NULL),
+              0);
+    ASSERT_EQ(mcp_seed_project_adr(cache, "bevy", tmp_dir, "# Before watch\n"), CBM_STORE_OK);
+    ASSERT_EQ(cbm_setenv("CBM_CACHE_DIR", cache, 1), 0);
+
+    srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+    snprintf(args, sizeof(args),
+             "{\"repo_path\":\"%s\",\"name\":\"bevy\",\"mode\":\"fast\",\"adr_fill\":false}",
+             tmp_dir);
+    resp = cbm_mcp_handle_tool(srv, "index_repository", args);
+    ASSERT_NOT_NULL(resp);
+    ASSERT(response_contains_json_fragment(resp, "\"status\":\"indexed\""));
+    free(resp);
+
+    stored = mcp_adr_load(cache, "bevy");
+    ASSERT_NOT_NULL(stored);
+    ASSERT_STR_EQ(stored, "# Before watch\n");
+    ASSERT_NULL(strstr(stored, "PURPOSE-WATCHER-SHOULD-NOT-FILL"));
+    ASSERT_NULL(strstr(stored, "CBM-GENERATED"));
+    free(stored);
+
+    cbm_mcp_server_free(srv);
+    cleanup_project_db(cache, "bevy");
+    restore_cache_dir(saved_copy);
+    free(saved_copy);
+    th_cleanup(cache);
+    th_cleanup(tmp_dir);
+    PASS();
+}
+
 /* #1211: list_projects only ever advertises the project NAME, never the
  * repo_path, but re-indexing by that same name (the natural next call) used
  * to fall straight to "repo_path is required" because nothing resolved the
@@ -10555,6 +11013,7 @@ SUITE(mcp) {
     RUN_TEST(mcp_get_string_arg);
     RUN_TEST(mcp_get_int_arg);
     RUN_TEST(mcp_get_bool_arg);
+    RUN_TEST(mcp_index_want_adr_fill_defaults_true);
 
     /* Argument extraction — edge cases */
     RUN_TEST(mcp_get_string_arg_empty_json);
@@ -10664,6 +11123,12 @@ SUITE(mcp) {
     RUN_TEST(tool_manage_adr_unified_backend_issue256);
     RUN_TEST(tool_manage_adr_rejects_removed_sections_argument);
     RUN_TEST(tool_index_repository_reports_store_backed_adr);
+    RUN_TEST(tool_index_repository_fills_adr_same_as_store_get);
+    RUN_TEST(tool_manage_adr_manual_survives_next_index);
+    RUN_TEST(tool_index_repository_adr_fill_false_leaves_unmarked);
+    RUN_TEST(tool_index_repository_fills_gamedev_same_as_store_get);
+    RUN_TEST(tool_manage_adr_manual_survives_next_gamedev_index);
+    RUN_TEST(tool_index_repository_adr_fill_false_leaves_gamedev_unmarked);
     RUN_TEST(tool_index_repository_resolves_root_path_from_project_name_issue1211);
     RUN_TEST(tool_index_repository_unknown_project_name_still_requires_repo_path);
     RUN_TEST(tool_index_repository_dot_uses_absolute_project_key_and_preserves_adr);

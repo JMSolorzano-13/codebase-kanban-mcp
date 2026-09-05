@@ -1,0 +1,32 @@
+{
+  "active_spec": null,
+  "status": "completed",
+  "mode": "normal",
+  "started_at": "2026-09-03T01:10:00Z",
+  "completed_at": "2026-09-03T17:44:00Z",
+  "completed_specs": [
+    "spec-001-w3q-executive-dashboard",
+    "spec-002-p8w-project-workspace",
+    "spec-003-h7q-path-project-identity",
+    "spec-004-j8k-adr-parse-on-reindex",
+    "spec-005-v2m-spec-card-expand",
+    "spec-006-k3n-spec-archive",
+    "spec-007-n6p-last-indexed-local",
+    "spec-008-g8r-grill-epic-todo",
+    "spec-009-t4x-specs-tab-grill-presence",
+    "spec-010-c4h-game-tab-silent-win",
+    "spec-011-q5n-game-phase-board",
+    "spec-012-m2k-game-expand-archive-deps",
+    "spec-013-r9w-adr-fill-gamedev-trio",
+    "spec-014-x7m-filters",
+    "spec-015-s5k-specs-debt-and-path",
+    "spec-016-d9v-game-inbox-registry",
+    "spec-017-b4w-game-debt-chrome"
+  ],
+  "planned_specs": [],
+  "draft_specs": [],
+  "source": {
+    "grill_plan": ".grill/plans/tech-debt-and-epics-registry/plan.md",
+    "grill_epic": ".grill/plans/tech-debt-and-epics-registry/epics/epic-003-game-debt-chrome.md"
+  }
+}
